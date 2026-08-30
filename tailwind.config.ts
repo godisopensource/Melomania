@@ -10,9 +10,13 @@ export default {
   theme: {
     extend: {
       fontFamily: {
-        sans: ["var(--font-sans)", "-apple-system", "BlinkMacSystemFont", "Segoe UI", "Roboto", "sans-serif"],
-        display: ["Bonbance", "var(--font-display)", "-apple-system", "sans-serif"],
-        accent: ["Bonbance", "var(--font-display)", "-apple-system", "sans-serif"],
+        // Body font — Inter via CSS variable injected by next/font/google
+        sans: ["var(--font-inter)", "ui-sans-serif", "system-ui", "-apple-system", "sans-serif"],
+        // Display / accent font — Bonbance via CSS variable injected by next/font/local
+        display: ["var(--font-bonbance)", "ui-sans-serif", "sans-serif"],
+        accent: ["var(--font-bonbance)", "ui-sans-serif", "sans-serif"],
+        // Monospace
+        mono: ["ui-monospace", "SFMono-Regular", "Menlo", "Monaco", "Consolas", "monospace"],
       },
       colors: {
         brand: {

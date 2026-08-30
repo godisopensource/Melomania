@@ -47,11 +47,11 @@ export default function HomePage() {
   return (
     <div className="space-y-8 animate-in fade-in">
       {/* Editorial Header Banner */}
-      <div className="relative overflow-hidden rounded-2xl border border-border bg-gradient-to-br from-brand-950 via-card to-card p-6 sm:p-8 shadow-xl">
+      <div className="relative overflow-hidden bg-gradient-to-br from-brand-950 via-card to-card p-6 sm:p-8 shadow-xl">
         <div className="relative z-10 max-w-2xl space-y-3.5">
-          <div className="inline-flex items-center gap-2 rounded-md border border-brand-500/30 bg-brand-500/10 px-2.5 py-1 text-xs font-semibold text-brand-320">
+          {/*<div className="inline-flex items-center gap-2 rounded-md border border-brand-500/30 bg-brand-500/10 px-2.5 py-1 text-xs font-semibold text-brand-320">
             <span>Social music sharing & annotations</span>
-          </div>
+          </div>*/}
 
           <h1 className="font-display text-3xl sm:text-5xl font-bold tracking-tight text-foreground leading-tight">
             Share, annotate, and discuss music
