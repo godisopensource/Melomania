@@ -1,0 +1,57 @@
+import { NextRequest, NextResponse } from "next/server";
+import { db } from "@/lib/db";
+import { normalizeMusicText } from "@/lib/utils";
+
+export async function GET(req: NextRequest) {
+  const { searchParams } = new URL(req.url);
+  const q = searchParams.get("q") || "";
+  const type = searchParams.get("type"); // 'all', 'user', 'track', 'artist', 'playlist'
+
+  if (!q.trim()) {
+    return NextResponse.json({
+      users: db.getUsers().slice(0, 5).map(({ passwordHash, ...rest }) => rest),
+      tracks: db.getMusicResources().filter((r) => r.type === "track").slice(0, 5),
+      playlists: db.getMusicResources().filter((r) => r.type === "playlist").slice(0, 5),
+    });
+  }
+
+  const queryClean = normalizeMusicText(q);
+
+  // Match users
+  const users = db
+    .getUsers()
+    .filter(
+      (u) =>
+        u.username.toLowerCase().includes(queryClean) ||
+        u.displayName.toLowerCase().includes(queryClean)
+    )
+    .slice(0, 6)
+    .map(({ passwordHash, ...rest }) => rest);
+
+  // Match music resources
+  const allResources = db.getMusicResources();
+  const tracks = allResources
+    .filter(
+      (r) =>
+        r.type === "track" &&
+        (normalizeMusicText(r.title).includes(queryClean) ||
+          normalizeMusicText(r.artistName).includes(queryClean) ||
+          normalizeMusicText(r.albumName || "").includes(queryClean))
+    )
+    .slice(0, 6);
+
+  const playlists = allResources
+    .filter(
+      (r) =>
+        r.type === "playlist" &&
+        (normalizeMusicText(r.title).includes(queryClean) ||
+          normalizeMusicText(r.artistName).includes(queryClean))
+    )
+    .slice(0, 6);
+
+  return NextResponse.json({
+    users,
+    tracks,
+    playlists,
+  });
+}
