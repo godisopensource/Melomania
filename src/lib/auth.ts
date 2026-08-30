@@ -11,16 +11,14 @@ export async function getSessionUser(): Promise<User | null> {
     const sessionCookie = cookieStore.get(SESSION_COOKIE_NAME);
     
     if (!sessionCookie?.value) {
-      // Default to Admin in first run
-      const admin = db.getUserById("usr_admin");
-      return admin || null;
+      return null;
     }
 
     const userId = sessionCookie.value;
     const user = db.getUserById(userId);
     return user || null;
   } catch (err) {
-    return db.getUserById("usr_admin") || null;
+    return null;
   }
 }
 

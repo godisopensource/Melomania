@@ -7,8 +7,8 @@ import { Lock, Mail, User as UserIcon, AlertCircle } from "lucide-react";
 export function AuthModal() {
   const { authModalOpen, authModalMode, closeAuthModal, openAuthModal, login, register } = useAuth();
   
-  const [emailOrUsername, setEmailOrUsername] = useState("admin");
-  const [password, setPassword] = useState("9caxV&H2hhLg2n%tJ8Z!s%Zm0");
+  const [emailOrUsername, setEmailOrUsername] = useState("");
+  const [password, setPassword] = useState("");
   const [email, setEmail] = useState("");
   const [username, setUsername] = useState("");
   const [displayName, setDisplayName] = useState("");
@@ -85,7 +85,7 @@ export function AuthModal() {
                   required
                   value={emailOrUsername}
                   onChange={(e) => setEmailOrUsername(e.target.value)}
-                  placeholder="admin"
+                  placeholder="Username or email"
                   className="w-full rounded-lg border border-border bg-black/40 py-2.5 pl-10 pr-3.5 text-sm text-foreground focus:border-brand-500 focus:outline-none"
                 />
               </div>
