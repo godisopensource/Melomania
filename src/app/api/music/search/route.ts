@@ -3,15 +3,16 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { normalizeMusicText } from "@/lib/utils";
+import { toPublicUser } from "@/lib/security";
 
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url);
-  const q = searchParams.get("q") || "";
+  const q = (searchParams.get("q") || "").slice(0, 100);
   const type = searchParams.get("type"); // 'all', 'user', 'track', 'artist', 'playlist'
 
   if (!q.trim()) {
     return NextResponse.json({
-      users: db.getUsers().slice(0, 5).map(({ passwordHash, ...rest }) => rest),
+      users: db.getUsers().slice(0, 5).map(toPublicUser),
       tracks: db.getMusicResources().filter((r) => r.type === "track").slice(0, 5),
       playlists: db.getMusicResources().filter((r) => r.type === "playlist").slice(0, 5),
     });
@@ -28,7 +29,9 @@ export async function GET(req: NextRequest) {
         u.displayName.toLowerCase().includes(queryClean)
     )
     .slice(0, 6)
-    .map(({ passwordHash, ...rest }) => rest);
+    .map(toPublicUser);
+
+  void type;
 
   // Match music resources
   const allResources = db.getMusicResources();

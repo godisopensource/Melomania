@@ -1,20 +1,87 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { useAuth } from "../providers/AuthProvider";
-import { Lock, Mail, User as UserIcon, AlertCircle } from "lucide-react";
+import { Lock, Mail, AlertCircle } from "lucide-react";
+
+declare global {
+  interface Window {
+    turnstile?: {
+      render: (el: string | HTMLElement, opts: Record<string, unknown>) => string;
+      reset: (id?: string) => void;
+      getResponse: (id?: string) => string;
+    };
+    melomaniaTurnstileLoad?: () => void;
+  }
+}
+
+const TURNSTILE_SITE_KEY = process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY || "";
 
 export function AuthModal() {
   const { authModalOpen, authModalMode, closeAuthModal, openAuthModal, login, register } = useAuth();
-  
+
   const [emailOrUsername, setEmailOrUsername] = useState("");
   const [password, setPassword] = useState("");
   const [email, setEmail] = useState("");
   const [username, setUsername] = useState("");
   const [displayName, setDisplayName] = useState("");
   const [regPassword, setRegPassword] = useState("");
+  const [turnstileToken, setTurnstileToken] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const widgetId = useRef<string | null>(null);
+  const widgetRef = useRef<HTMLDivElement>(null);
+
+  // Charge le widget Turnstile uniquement sur l'onglet inscription
+  useEffect(() => {
+    if (!authModalOpen || authModalMode !== "register" || !TURNSTILE_SITE_KEY) return;
+    setTurnstileToken("");
+    widgetId.current = null;
+
+    const renderWidget = () => {
+      if (!window.turnstile || !widgetRef.current) return;
+      widgetRef.current.innerHTML = "";
+      try {
+        widgetId.current = window.turnstile.render(widgetRef.current, {
+          sitekey: TURNSTILE_SITE_KEY,
+          action: "signup",
+          callback: (token: string) => setTurnstileToken(token),
+          "expired-callback": () => setTurnstileToken(""),
+          "error-callback": () => setTurnstileToken(""),
+        });
+      } catch {
+        /* widget indisponible : le serveur rejettera proprement */
+      }
+    };
+
+    if (window.turnstile) {
+      renderWidget();
+      return;
+    }
+    window.melomaniaTurnstileLoad = renderWidget;
+    const script = document.querySelector<HTMLScriptElement>('script[data-melomania-turnstile]');
+    if (!script) {
+      const s = document.createElement("script");
+      s.src = "https://challenges.cloudflare.com/turnstile/v0/api.js?onload=melomaniaTurnstileLoad";
+      s.async = true;
+      s.defer = true;
+      s.setAttribute("data-melomania-turnstile", "1");
+      document.head.appendChild(s);
+    } else {
+      // Script déjà présent mais pas encore prêt : réessaie
+      const t = setInterval(() => {
+        if (window.turnstile) {
+          clearInterval(t);
+          renderWidget();
+        }
+      }, 300);
+      const stop = setTimeout(() => clearInterval(t), 10000);
+      return () => {
+        clearInterval(t);
+        clearTimeout(stop);
+      };
+    }
+  }, [authModalOpen, authModalMode]);
 
   if (!authModalOpen) return null;
 
@@ -22,7 +89,7 @@ export function AuthModal() {
     e.preventDefault();
     setError(null);
     setSubmitting(true);
-    const res = await login(emailOrUsername, password);
+    const res = await login(emailOrUsername.trim(), password);
     setSubmitting(false);
     if (!res.success) {
       setError(res.error || "Authentication failed");
@@ -32,16 +99,33 @@ export function AuthModal() {
   const handleRegister = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
+    // Pré-validation côté client (le serveur re-valide strictement)
+    const em = email.trim();
+    if (!em.includes("@") || !em.split("@")[1]?.includes(".")) {
+      setError("Please enter a valid email address (e.g. you@example.com).");
+      return;
+    }
+    if (regPassword.length < 12) {
+      setError("Password must be at least 12 characters.");
+      return;
+    }
     setSubmitting(true);
     const res = await register({
-      email,
-      username,
-      displayName,
+      email: em,
+      username: username.trim(),
+      displayName: displayName.trim(),
       passwordPlain: regPassword,
+      // Champ canonique Turnstile : cf-turnstile-response
+      "cf-turnstile-response": turnstileToken || undefined,
     });
     setSubmitting(false);
     if (!res.success) {
       setError(res.error || "Registration failed");
+      // Le token Turnstile est à usage unique : on le régénère après échec
+      setTurnstileToken("");
+      try {
+        if (window.turnstile && widgetId.current) window.turnstile.reset(widgetId.current);
+      } catch {}
     }
   };
 
@@ -86,6 +170,8 @@ export function AuthModal() {
                   value={emailOrUsername}
                   onChange={(e) => setEmailOrUsername(e.target.value)}
                   placeholder="Username or email"
+                  autoComplete="username"
+                  maxLength={254}
                   className="w-full rounded-lg border border-border bg-black/40 py-2.5 pl-10 pr-3.5 text-sm text-foreground focus:border-brand-500 focus:outline-none"
                 />
               </div>
@@ -100,6 +186,8 @@ export function AuthModal() {
                   required
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
+                  autoComplete="current-password"
+                  maxLength={128}
                   className="w-full rounded-lg border border-border bg-black/40 py-2.5 pl-10 pr-3.5 text-sm text-foreground focus:border-brand-500 focus:outline-none"
                 />
               </div>
@@ -114,7 +202,7 @@ export function AuthModal() {
             </button>
 
             <p className="text-center text-xs text-muted-foreground pt-2">
-              Don't have an account yet?{" "}
+              Don&apos;t have an account yet?{" "}
               <button
                 type="button"
                 onClick={() => openAuthModal("register")}
@@ -134,6 +222,8 @@ export function AuthModal() {
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 placeholder="your.email@example.com"
+                autoComplete="email"
+                maxLength={254}
                 className="w-full rounded-lg border border-border bg-black/40 px-3.5 py-2 text-sm text-foreground focus:border-brand-500 focus:outline-none"
               />
             </div>
@@ -149,6 +239,10 @@ export function AuthModal() {
                   value={username}
                   onChange={(e) => setUsername(e.target.value)}
                   placeholder="username"
+                  autoComplete="username"
+                  maxLength={30}
+                  pattern="[a-z0-9_-]{3,30}"
+                  title="3-30 chars: lowercase letters, digits, _ and -"
                   className="w-full rounded-lg border border-border bg-black/40 px-3.5 py-2 text-sm text-foreground focus:border-brand-500 focus:outline-none"
                 />
               </div>
@@ -159,6 +253,8 @@ export function AuthModal() {
                   value={displayName}
                   onChange={(e) => setDisplayName(e.target.value)}
                   placeholder="Display Name"
+                  autoComplete="nickname"
+                  maxLength={40}
                   className="w-full rounded-lg border border-border bg-black/40 px-3.5 py-2 text-sm text-foreground focus:border-brand-500 focus:outline-none"
                 />
               </div>
@@ -171,10 +267,27 @@ export function AuthModal() {
                 required
                 value={regPassword}
                 onChange={(e) => setRegPassword(e.target.value)}
-                placeholder="Minimum 6 characters"
+                placeholder="Minimum 12 characters"
+                autoComplete="new-password"
+                minLength={12}
+                maxLength={128}
                 className="w-full rounded-lg border border-border bg-black/40 px-3.5 py-2 text-sm text-foreground focus:border-brand-500 focus:outline-none"
               />
+              <p className="text-[11px] leading-relaxed text-muted-foreground">
+                12+ characters with at least 3 of: lowercase, UPPERCASE, digits, symbols.
+              </p>
             </div>
+
+            {TURNSTILE_SITE_KEY ? (
+              <div className="flex justify-center">
+                <div ref={widgetRef} />
+              </div>
+            ) : (
+              <p className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-2.5 text-[11px] leading-relaxed text-amber-200/90">
+                Bot protection (Cloudflare Turnstile) will be active once{" "}
+                <code>NEXT_PUBLIC_TURNSTILE_SITE_KEY</code> is configured.
+              </p>
+            )}
 
             <button
               type="submit"

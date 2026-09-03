@@ -1,5 +1,6 @@
 import fs from "fs";
 import path from "path";
+import crypto from "crypto";
 import bcrypt from "bcryptjs";
 import {
   User,
@@ -46,9 +47,35 @@ interface DatabaseSchema {
 
 const DB_FILE_PATH = path.join(process.cwd(), ".melomania-db.json");
 
+// Données publiques d'un utilisateur : jamais de passwordHash, jamais d'email.
+// L'email n'est exposé que pour la session elle-même (via /api/auth/me).
+// Le cast `as User` conserve les types existants sans fuite à l'exécution.
+function publicAuthor(u: User | undefined): User | undefined {
+  if (!u) return undefined;
+  const { passwordHash: _h, email: _e, ...rest } = u;
+  return rest as User;
+}
+
+// Admin seed : jamais de mot de passe en dur dans le code.
+// - ADMIN_INITIAL_PASSWORD_HASH (hash bcrypt déjà calculé) prioritaire
+// - sinon ADMIN_INITIAL_PASSWORD (mot de passe clair, hashé ici)
+// - sinon mot de passe aléatoire inutilisable (il faut définir la variable d'env)
+function getAdminPasswordHash(): string {
+  const preHashed = process.env.ADMIN_INITIAL_PASSWORD_HASH;
+  if (preHashed && preHashed.startsWith("$2")) return preHashed;
+  const plain = process.env.ADMIN_INITIAL_PASSWORD;
+  if (plain && plain.length >= 12) return bcrypt.hashSync(plain, 12);
+  if (process.env.NODE_ENV === "production") {
+    console.warn(
+      "[db] ADMIN_INITIAL_PASSWORD(HASH) not set — admin account created with an unusable random password."
+    );
+  }
+  return bcrypt.hashSync(crypto.randomBytes(32).toString("hex"), 12);
+}
+
 // Clean Production Seed
 function getInitialSeed(): DatabaseSchema {
-  const adminPasswordHash = bcrypt.hashSync("9caxV&H2hhLg2n%tJ8Z!s%Zm0", 10);
+  const adminPasswordHash = getAdminPasswordHash();
   const now = new Date().toISOString();
 
   const users: User[] = [
@@ -358,7 +385,7 @@ class MelomaniaDatabase {
   private hydrateShare(share: MusicShare): MusicShare {
     return {
       ...share,
-      author: this.getUserById(share.authorId),
+      author: publicAuthor(this.getUserById(share.authorId)),
       resource: this.getMusicResourceById(share.resourceId),
       sources: this.getMusicSourcesByResourceId(share.resourceId),
     };
@@ -392,7 +419,7 @@ class MelomaniaDatabase {
     const share = thread.shareId ? this.getMusicShareById(thread.shareId) : undefined;
     return {
       ...thread,
-      createdBy: this.getUserById(thread.createdById),
+      createdBy: publicAuthor(this.getUserById(thread.createdById)),
       share,
     };
   }
@@ -403,7 +430,7 @@ class MelomaniaDatabase {
       .filter((p) => p.conversationId === conversationId)
       .map((p) => ({
         ...p,
-        user: this.getUserById(p.userId),
+        user: publicAuthor(this.getUserById(p.userId)),
       }));
   }
 
@@ -503,7 +530,7 @@ class MelomaniaDatabase {
 
     return {
       ...comment,
-      author: this.getUserById(comment.authorId),
+      author: publicAuthor(this.getUserById(comment.authorId)),
       attachedResource,
       mentions,
       replies: commentReplies.length > 0 ? commentReplies : undefined,
@@ -536,6 +563,11 @@ class MelomaniaDatabase {
       this.data.externalConnections[idx] = {
         ...this.data.externalConnections[idx],
         ...connection,
+        // Ne jamais écraser les tokens chiffrés avec des valeurs vides
+        accessTokenEncrypted:
+          connection.accessTokenEncrypted || this.data.externalConnections[idx].accessTokenEncrypted,
+        refreshTokenEncrypted:
+          connection.refreshTokenEncrypted ?? this.data.externalConnections[idx].refreshTokenEncrypted,
         updatedAt: new Date().toISOString(),
       };
     } else {
@@ -586,7 +618,7 @@ class MelomaniaDatabase {
       .filter((n) => n.recipientId === userId)
       .map((n) => ({
         ...n,
-        actor: n.actorId ? this.getUserById(n.actorId) : undefined,
+        actor: n.actorId ? publicAuthor(this.getUserById(n.actorId)) : undefined,
         musicResource: n.musicResourceId ? this.getMusicResourceById(n.musicResourceId) : undefined,
       }))
       .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
@@ -624,7 +656,7 @@ class MelomaniaDatabase {
   getReports(): Report[] {
     return this.data.reports.map((r) => ({
       ...r,
-      reporter: this.getUserById(r.reporterId),
+      reporter: publicAuthor(this.getUserById(r.reporterId)),
     }));
   }
 
@@ -930,21 +962,21 @@ class MelomaniaDatabase {
       .map((r) => this.hydrateTrackNote(r, []))
       .sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
     const mentions = this.data.mentions.filter((m) => m.commentId === note.id);
-    return { ...note, author: this.getUserById(note.authorId), mentions, replies: replies.length > 0 ? replies : undefined };
+    return { ...note, author: publicAuthor(this.getUserById(note.authorId)), mentions, replies: replies.length > 0 ? replies : undefined };
   }
 
   // --- GAP COMMENTS (between two consecutive tracks) ---
   getGapComments(playlistId: string): GapComment[] {
     return this.data.gapComments
       .filter((g) => g.playlistId === playlistId)
-      .map((g) => ({ ...g, author: this.getUserById(g.authorId) }))
+      .map((g) => ({ ...g, author: publicAuthor(this.getUserById(g.authorId)) }))
       .sort((a, b) => a.afterSourcePosition - b.afterSourcePosition);
   }
 
   createGapComment(gap: GapComment): GapComment {
     this.data.gapComments.push(gap);
     this.persist();
-    return { ...gap, author: this.getUserById(gap.authorId) };
+    return { ...gap, author: publicAuthor(this.getUserById(gap.authorId)) };
   }
 
   deleteGapComment(id: string): boolean {

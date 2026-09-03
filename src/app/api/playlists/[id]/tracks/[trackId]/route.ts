@@ -84,7 +84,8 @@ export async function PATCH(
     if (!Array.isArray(body.tags)) {
       return NextResponse.json({ error: "tags must be an array of strings." }, { status: 400 });
     }
-    tags = [...new Set(body.tags.map((t: unknown) => String(t).trim()).filter(Boolean))].slice(0, 20).map((t) => t.slice(0, 40));
+    const rawTags: string[] = body.tags.map((t: unknown) => String(t).trim()).filter((t: string) => t.length > 0);
+    tags = [...new Set(rawTags)].slice(0, 20).map((t) => t.slice(0, 40));
   }
 
   // Custom criterion scores: each key must be a criterion of this playlist.

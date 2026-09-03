@@ -5,12 +5,17 @@ import { User } from "@/types";
 
 interface AuthContextType {
   user: User | null;
-  allUsers: User[];
   isLoading: boolean;
   login: (emailOrUsername: string, passwordPlain: string) => Promise<{ success: boolean; error?: string }>;
-  register: (data: { email: string; username: string; displayName?: string; passwordPlain: string }) => Promise<{ success: boolean; error?: string }>;
+  register: (data: {
+    email: string;
+    username: string;
+    displayName?: string;
+    passwordPlain: string;
+    /** Token Turnstile (champ canonique cf-turnstile-response). */
+    "cf-turnstile-response"?: string;
+  }) => Promise<{ success: boolean; error?: string }>;
   logout: () => Promise<void>;
-  switchUser: (userId: string) => Promise<void>;
   openAuthModal: (mode?: "login" | "register") => void;
   closeAuthModal: () => void;
   authModalOpen: boolean;
@@ -21,7 +26,6 @@ const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
-  const [allUsers, setAllUsers] = useState<User[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [authModalOpen, setAuthModalOpen] = useState(false);
   const [authModalMode, setAuthModalMode] = useState<"login" | "register">("login");
@@ -32,7 +36,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       if (res.ok) {
         const data = await res.json();
         setUser(data.user || null);
-        setAllUsers(data.allUsers || []);
       }
     } catch (err) {
       console.error("Failed to load user session:", err);
@@ -64,7 +67,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
-  const register = async (data: { email: string; username: string; displayName?: string; passwordPlain: string }) => {
+  const register = async (data: {
+    email: string;
+    username: string;
+    displayName?: string;
+    passwordPlain: string;
+    "cf-turnstile-response"?: string;
+  }) => {
     try {
       const res = await fetch("/api/auth/me", {
         method: "POST",
@@ -75,6 +84,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           username: data.username,
           displayName: data.displayName,
           password: data.passwordPlain,
+          "cf-turnstile-response": data["cf-turnstile-response"],
         }),
       });
       const resData = await res.json();
@@ -98,23 +108,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setUser(null);
   };
 
-  const switchUser = async (userId: string) => {
-    setIsLoading(true);
-    try {
-      const res = await fetch("/api/auth/me", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "switch_demo", userId }),
-      });
-      if (res.ok) {
-        const data = await res.json();
-        setUser(data.user);
-      }
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
   const openAuthModal = (mode: "login" | "register" = "login") => {
     setAuthModalMode(mode);
     setAuthModalOpen(true);
@@ -128,12 +121,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     <AuthContext.Provider
       value={{
         user,
-        allUsers,
         isLoading,
         login,
         register,
         logout,
-        switchUser,
         openAuthModal,
         closeAuthModal,
         authModalOpen,

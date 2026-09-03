@@ -3,6 +3,13 @@ import crypto from "crypto";
 const ENCRYPTION_KEY = process.env.ENCRYPTION_KEY || "melomania-secret-encryption-key-32b!"; // 32 characters fallback
 const IV_LENGTH = 16;
 
+if (
+  process.env.NODE_ENV === "production" &&
+  (!process.env.ENCRYPTION_KEY || process.env.ENCRYPTION_KEY.length < 32)
+) {
+  console.warn("[encryption] ENCRYPTION_KEY missing or too short — OAuth tokens are not safely encrypted.");
+}
+
 /**
  * Encrypts sensitive strings (e.g. OAuth tokens) before storing in DB
  */
