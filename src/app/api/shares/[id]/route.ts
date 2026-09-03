@@ -2,6 +2,7 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { getSessionUser } from "@/lib/auth";
+import { toPublicUser } from "@/lib/security";
 import { db } from "@/lib/db";
 
 export async function GET(
@@ -25,12 +26,20 @@ export async function GET(
   const participants = await db.getParticipantsByConversationId(share.conversationId);
   const sources = await db.getMusicSourcesByResourceId(share.resourceId);
 
+  // Public view of explicitly invited users (for the sharing panel).
+  const allowedUsers = [];
+  for (const uid of share.allowedUserIds || []) {
+    const u = await db.getUserById(uid);
+    if (u) allowedUsers.push(toPublicUser(u));
+  }
+
   return NextResponse.json({
     share,
     thread,
     comments,
     participants,
     sources,
+    allowedUsers,
   });
 }
 
@@ -76,49 +85,91 @@ export async function PATCH(
   }
   try {
     const body = await req.json();
-    const { action, username } = body;
-    if (action !== "invite" || typeof username !== "string" || !username.trim()) {
-      return NextResponse.json({ error: "Provide { action: 'invite', username }." }, { status: 400 });
-    }
-    const clean = username.trim().replace(/^@/, "").slice(0, 30);
-    const target = await db.getUserByUsername(clean);
-    if (!target) {
-      return NextResponse.json({ error: `User not found: @${clean}` }, { status: 404 });
-    }
-    if (target.id === share.authorId) {
-      return NextResponse.json({ error: "You already own this share." }, { status: 400 });
-    }
+    const { action } = body;
     const now = new Date().toISOString();
     const rand = Math.random().toString(36).slice(2, 8);
-    const current = await db.getMusicShareById(id);
-    const allowed = new Set(current?.allowedUserIds || []);
-    allowed.add(target.id);
-    await db.updateMusicShare(id, {
-      visibility: "private",
-      allowedUserIds: [...allowed],
-    } as any);
-    await db.addParticipant({
-      id: `part_${Date.now()}_${rand}`,
-      conversationId: share.conversationId,
-      userId: target.id,
-      role: "member",
-      joinedAt: now,
-    });
-    await db.createNotification({
-      id: `notif_${Date.now()}_${rand}`,
-      recipientId: target.id,
-      actorId: user.id,
-      type: "share_invitation",
-      conversationId: share.conversationId,
-      shareId: share.id,
-      musicResourceId: share.resourceId,
-      isRead: false,
-      message: `${user.displayName} shared a private track with you`,
-      createdAt: now,
-    });
-    const updated = await db.getMusicShareById(id, user.id);
-    return NextResponse.json({ share: updated });
+
+    // 1. Switch visibility at any time (public <-> private). The invited
+    //    users list is preserved so going private again restores sharing.
+    if (action === "set_visibility") {
+      const { visibility } = body;
+      if (visibility !== "public" && visibility !== "private") {
+        return NextResponse.json({ error: "visibility must be 'public' or 'private'." }, { status: 400 });
+      }
+      await db.updateMusicShare(id, { visibility } as any);
+      const updated = await db.getMusicShareById(id, user.id);
+      return NextResponse.json({ share: updated });
+    }
+
+    // 2. Invite someone by username (works from any state; on a public
+    //    share it simply grants nothing extra — everyone can already see it).
+    if (action === "invite") {
+      const { username } = body;
+      if (typeof username !== "string" || !username.trim()) {
+        return NextResponse.json({ error: "Provide { action: 'invite', username }." }, { status: 400 });
+      }
+      const clean = username.trim().replace(/^@/, "").slice(0, 30);
+      const target = await db.getUserByUsername(clean);
+      if (!target) {
+        return NextResponse.json({ error: `User not found: @${clean}` }, { status: 404 });
+      }
+      if (target.id === share.authorId) {
+        return NextResponse.json({ error: "You already own this share." }, { status: 400 });
+      }
+      const current = await db.getMusicShareById(id);
+      const allowed = new Set(current?.allowedUserIds || []);
+      const already = allowed.has(target.id);
+      allowed.add(target.id);
+      await db.updateMusicShare(id, { allowedUserIds: [...allowed] } as any);
+      await db.addParticipant({
+        id: `part_${Date.now()}_${rand}`,
+        conversationId: share.conversationId,
+        userId: target.id,
+        role: "member",
+        joinedAt: now,
+      });
+      if (!already) {
+        await db.createNotification({
+          id: `notif_${Date.now()}_${rand}`,
+          recipientId: target.id,
+          actorId: user.id,
+          type: "share_invitation",
+          conversationId: share.conversationId,
+          shareId: share.id,
+          musicResourceId: share.resourceId,
+          isRead: false,
+          message: `${user.displayName} shared ${share.visibility === "private" ? "a private track" : "a track"} with you`,
+          createdAt: now,
+        });
+      }
+      const updated = await db.getMusicShareById(id, user.id);
+      return NextResponse.json({ share: updated, alreadyInvited: already });
+    }
+
+    // 3. Uninvite someone: removed from the allowed list AND from the
+    //    conversation participants (participants alone grant visibility).
+    if (action === "uninvite") {
+      const { userId } = body;
+      if (typeof userId !== "string" || !userId) {
+        return NextResponse.json({ error: "Provide { action: 'uninvite', userId }." }, { status: 400 });
+      }
+      if (userId === share.authorId) {
+        return NextResponse.json({ error: "You cannot remove the owner." }, { status: 400 });
+      }
+      const current = await db.getMusicShareById(id);
+      await db.updateMusicShare(id, {
+        allowedUserIds: (current?.allowedUserIds || []).filter((uid) => uid !== userId),
+      } as any);
+      await db.removeParticipant(share.conversationId, userId);
+      const updated = await db.getMusicShareById(id, user.id);
+      return NextResponse.json({ share: updated });
+    }
+
+    return NextResponse.json(
+      { error: "Unknown action. Use 'set_visibility', 'invite' or 'uninvite'." },
+      { status: 400 }
+    );
   } catch (e) {
-    return NextResponse.json({ error: "Unable to invite user." }, { status: 500 });
+    return NextResponse.json({ error: "Unable to update sharing." }, { status: 500 });
   }
 }

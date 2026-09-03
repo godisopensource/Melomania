@@ -4,7 +4,7 @@
 import React, { useState, useEffect, use } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { MusicShare, ConversationThread, Comment, ConversationParticipant } from "@/types";
+import { MusicShare, ConversationThread, Comment, ConversationParticipant, User } from "@/types";
 import { YouTubePlayer } from "@/components/player/YouTubePlayer";
 import { CommentSection } from "@/components/comments/CommentSection";
 import { ExportModal } from "@/components/export/ExportModal";
@@ -23,6 +23,9 @@ import {
   Check,
   Trash2,
   UserPlus,
+  UserMinus,
+  Eye,
+  Lock,
   Loader2,
 } from "lucide-react";
 
@@ -46,7 +49,10 @@ export default function ShareDetailPage({
   const [copiedLink, setCopiedLink] = useState(false);
   const [inviteUsername, setInviteUsername] = useState("");
   const [inviteBusy, setInviteBusy] = useState(false);
-  const [inviteError, setInviteError] = useState<string | null>(null);
+  const [shareBusy, setShareBusy] = useState(false);
+  const [uninviteBusy, setUninviteBusy] = useState<string | null>(null);
+  const [shareFeedback, setShareFeedback] = useState<{ kind: "error" | "info"; text: string } | null>(null);
+  const [allowedUsers, setAllowedUsers] = useState<User[]>([]);
   const [deleting, setDeleting] = useState(false);
 
   const isOwner = !!user && !!share && (user.id === share.authorId || user.role === "admin");
@@ -64,6 +70,7 @@ export default function ShareDetailPage({
         setThread(data.thread);
         setComments(data.comments || []);
         setParticipants(data.participants || []);
+        setAllowedUsers(data.allowedUsers || []);
 
         if (data.share?.resource) {
           playTrack(data.share.resource, 0, data.share.id);
@@ -101,26 +108,66 @@ export default function ShareDetailPage({
     }
   };
 
+  const patchSharing = async (payload: Record<string, unknown>) => {
+    const res = await fetch(`/api/shares/${id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || "Unable to update sharing.");
+    setShare(data.share);
+    await fetchShareData();
+    return data;
+  };
+
+  const handleVisibility = async (visibility: "public" | "private") => {
+    if (!share || shareBusy || share.visibility === visibility) return;
+    setShareBusy(true);
+    setShareFeedback(null);
+    try {
+      await patchSharing({ action: "set_visibility", visibility });
+      setShareFeedback({
+        kind: "info",
+        text: visibility === "public" ? "This share is now public." : "This share is now private.",
+      });
+    } catch (err: any) {
+      setShareFeedback({ kind: "error", text: err.message });
+    } finally {
+      setShareBusy(false);
+    }
+  };
+
   const handleInvite = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!inviteUsername.trim() || inviteBusy) return;
     setInviteBusy(true);
-    setInviteError(null);
+    setShareFeedback(null);
     try {
-      const res = await fetch(`/api/shares/${id}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "invite", username: inviteUsername.trim() }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Unable to invite user.");
-      setShare(data.share);
+      const data = await patchSharing({ action: "invite", username: inviteUsername.trim() });
       setInviteUsername("");
-      fetchShareData();
+      setShareFeedback({
+        kind: "info",
+        text: data.alreadyInvited ? "This user was already invited." : "Invitation sent.",
+      });
     } catch (err: any) {
-      setInviteError(err.message);
+      setShareFeedback({ kind: "error", text: err.message });
     } finally {
       setInviteBusy(false);
+    }
+  };
+
+  const handleUninvite = async (userId: string) => {
+    if (uninviteBusy) return;
+    setUninviteBusy(userId);
+    setShareFeedback(null);
+    try {
+      await patchSharing({ action: "uninvite", userId });
+      setShareFeedback({ kind: "info", text: "User removed from this share." });
+    } catch (err: any) {
+      setShareFeedback({ kind: "error", text: err.message });
+    } finally {
+      setUninviteBusy(null);
     }
   };
 
@@ -207,17 +254,93 @@ export default function ShareDetailPage({
         </div>
       </div>
 
-      {isOwner && (
-        <div className="rounded-2xl border border-border bg-card p-4 space-y-2">
-          <div className="flex items-center gap-2">
-            <UserPlus className="h-4 w-4 text-brand-410" />
-            <h2 className="text-xs font-bold text-foreground">
-              Private sharing {share.visibility === "private" ? "(this share is private)" : "(currently public)"}
-            </h2>
+      {isOwner && share && (
+        <div className="rounded-2xl border border-border bg-card p-4 space-y-3">
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2">
+              <UserPlus className="h-4 w-4 text-brand-410" />
+              <h2 className="text-xs font-bold text-foreground">Visibility & sharing</h2>
+            </div>
+            <span className="rounded border border-border bg-white/5 px-2 py-0.5 text-[10px] font-medium text-muted-foreground">
+              {share.visibility === "public" ? "Public" : "Private"}
+            </span>
+          </div>
+
+          <div className="flex gap-2">
+            <button
+              type="button"
+              onClick={() => handleVisibility("public")}
+              disabled={shareBusy || share.visibility === "public"}
+              className={`flex-1 flex items-center justify-center gap-1.5 rounded-lg py-2 text-xs font-semibold transition-colors disabled:opacity-60 ${
+                share.visibility === "public"
+                  ? "bg-brand-500 text-white shadow"
+                  : "bg-white/5 text-muted-foreground hover:text-foreground"
+              }`}
+            >
+              <Eye className="h-3.5 w-3.5" />
+              <span>Public</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => handleVisibility("private")}
+              disabled={shareBusy || share.visibility === "private"}
+              className={`flex-1 flex items-center justify-center gap-1.5 rounded-lg py-2 text-xs font-semibold transition-colors disabled:opacity-60 ${
+                share.visibility === "private"
+                  ? "bg-brand-500 text-white shadow"
+                  : "bg-white/5 text-muted-foreground hover:text-foreground"
+              }`}
+            >
+              <Lock className="h-3.5 w-3.5" />
+              <span>Private</span>
+            </button>
           </div>
           <p className="text-[11px] text-muted-foreground">
-            Keep it for yourself, or invite someone by username — they will be notified.
+            {share.visibility === "public"
+              ? "Everyone can see this share. The invited list below is kept for later."
+              : allowedUsers.length === 0
+                ? "Only you can see this share — invite someone below."
+                : "Only you and the invited users can see this share."}
           </p>
+
+          {allowedUsers.length > 0 && (
+            <div className="space-y-1.5">
+              <span className="text-[11px] font-semibold text-muted-foreground">
+                Shared with ({allowedUsers.length})
+              </span>
+              <div className="space-y-1">
+                {allowedUsers.map((u) => (
+                  <div
+                    key={u.id}
+                    className="flex items-center gap-2 rounded-lg border border-border bg-black/40 px-2.5 py-1.5"
+                  >
+                    <img
+                      src={u.avatarUrl || "/icon.png"}
+                      alt=""
+                      className="h-6 w-6 rounded-md object-cover ring-1 ring-border"
+                    />
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-xs font-semibold text-foreground">{u.displayName}</p>
+                      <p className="truncate text-[10px] text-muted-foreground">@{u.username}</p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => handleUninvite(u.id)}
+                      disabled={uninviteBusy === u.id}
+                      title={`Remove @${u.username}`}
+                      className="rounded p-1.5 text-muted-foreground hover:bg-destructive/15 hover:text-destructive transition-colors disabled:opacity-50"
+                    >
+                      {uninviteBusy === u.id ? (
+                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                      ) : (
+                        <UserMinus className="h-3.5 w-3.5" />
+                      )}
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
           <form onSubmit={handleInvite} className="flex gap-2">
             <input
               type="text"
@@ -234,7 +357,11 @@ export default function ShareDetailPage({
               {inviteBusy ? "Inviting…" : "Invite"}
             </button>
           </form>
-          {inviteError && <p className="text-[11px] text-destructive">{inviteError}</p>}
+          {shareFeedback && (
+            <p className={`text-[11px] ${shareFeedback.kind === "error" ? "text-destructive" : "text-emerald-400"}`}>
+              {shareFeedback.text}
+            </p>
+          )}
         </div>
       )}
 

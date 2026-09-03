@@ -815,6 +815,17 @@ class MelomaniaDatabase {
     });
   }
 
+  /** Remove a participant (used when uninviting someone from a private share). */
+  async removeParticipant(conversationId: string, userId: string): Promise<boolean> {
+    return this.mutate((data) => {
+      const initialLen = data.conversationParticipants.length;
+      data.conversationParticipants = data.conversationParticipants.filter(
+        (p) => !(p.conversationId === conversationId && p.userId === userId)
+      );
+      return data.conversationParticipants.length !== initialLen;
+    });
+  }
+
   // --- COMMENTS ---
   async getCommentsByConversationId(conversationId: string): Promise<Comment[]> {
     const data = await this.read();

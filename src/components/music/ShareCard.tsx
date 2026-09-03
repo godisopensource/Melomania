@@ -191,7 +191,7 @@ export function ShareCard({ share, onDeleted }: ShareCardProps) {
               </div>
 
               <Link
-                href={`/share/${share.id}`}
+                href={isPlaylist ? `/playlists/${resource.id}` : `/share/${share.id}`}
                 className="block truncate text-sm font-bold text-foreground hover:text-brand-320 transition-colors"
               >
                 {resource.title}

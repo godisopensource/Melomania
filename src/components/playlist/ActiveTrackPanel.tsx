@@ -27,9 +27,9 @@ interface ActiveTrackPanelProps {
 export function ActiveTrackPanel({ track, playlistId, categories, criteria = [] }: ActiveTrackPanelProps) {
   const { currentTrack: playing, currentTime, duration, playTrack } = usePlayer();
   const [videoOpen, setVideoOpen] = useState(false);
-  // Open by default so the "Loading lyrics…" state is visible and the fetch
-  // actually runs on track change (previously nothing mounted until the mic
-  // button was found and clicked).
+  // Open by default so the "Loading lyrics…" state is visible right away.
+  // (The fetch itself was previously blocked by the CSP: lrclib.net was
+  // missing from connect-src — fixed in next.config.ts.)
   const [lyricsOpen, setLyricsOpen] = useState(true);
 
   if (!track) {
@@ -98,6 +98,37 @@ export function ActiveTrackPanel({ track, playlistId, categories, criteria = [] 
                 <Mic className="h-3.5 w-3.5" aria-hidden="true" />
                 {lyricsOpen ? "Hide lyrics" : "Lyrics"}
               </button>
+              {lyricsOpen && (
+                <div
+                  className="absolute inset-0 z-10 isolate overflow-hidden rounded-2xl bg-black/60 backdrop-blur-md"
+                  role="dialog"
+                  aria-label={`Lyrics overlay for ${track.title}`}
+                >
+                  <div className="flex h-full flex-col p-3">
+                    <div className="mb-1 flex items-center justify-end">
+                      <button
+                        type="button"
+                        onClick={() => setLyricsOpen(false)}
+                        aria-label="Close lyrics"
+                        className="melo-focus-ring rounded-lg bg-black/60 p-1.5 text-white hover:bg-white/20"
+                      >
+                        <X className="h-4 w-4" />
+                      </button>
+                    </div>
+                    <div className="min-h-0 flex-1">
+                      <SyncedLyrics
+                        key={`${track.artistName}::${track.title}`}
+                        overlay
+                        artist={track.artistName}
+                        title={track.title}
+                        album={track.albumName}
+                        durationSeconds={track.durationSeconds}
+                      />
+                    </div>
+                    <p className="mt-1 text-right text-[10px] text-white/50">Lyrics via LRCLIB</p>
+                  </div>
+                </div>
+              )}
             </div>
           )}
           <span className="absolute left-3 top-3 inline-flex items-center gap-1 rounded-md bg-black/75 px-2 py-1 font-mono text-[11px] font-bold text-white">
@@ -182,18 +213,6 @@ export function ActiveTrackPanel({ track, playlistId, categories, criteria = [] 
           <YouTubeControls centered />
         </div>
       </div>
-
-      {/* Lyrics — mounted whenever the section is open so the loading
-          state is visible and the fetch actually runs. */}
-      {lyricsOpen && (
-        <SyncedLyrics
-          key={`${track.artistName}::${track.title}`}
-          artist={track.artistName}
-          title={track.title}
-          album={track.albumName}
-          durationSeconds={track.durationSeconds}
-        />
-      )}
 
       {/* This track's editorial thread */}
       <div className="rounded-2xl border border-border bg-card/40 p-3">

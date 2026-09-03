@@ -41,7 +41,7 @@ const nextConfig: NextConfig = {
               "style-src 'self' 'unsafe-inline'",
               "img-src 'self' data: blob: https://i.ytimg.com https://i9.ytimg.com https://yt3.ggpht.com https://images.unsplash.com https://i.scdn.co https://is1-ssl.mzstatic.com https://is2-ssl.mzstatic.com https://is3-ssl.mzstatic.com https://is4-ssl.mzstatic.com https://is5-ssl.mzstatic.com https://api.dicebear.com https://avatar.vercel.sh",
               "media-src 'self' blob: https://*.youtube.com https://*.googlevideo.com",
-              "connect-src 'self' https://challenges.cloudflare.com https://www.youtube-nocookie.com https://*.youtube.com https://*.googlevideo.com https://api.dicebear.com",
+              "connect-src 'self' https://challenges.cloudflare.com https://www.youtube-nocookie.com https://*.youtube.com https://*.googlevideo.com https://api.dicebear.com https://lrclib.net",
               "frame-src https://challenges.cloudflare.com https://www.youtube.com https://www.youtube-nocookie.com",
               "font-src 'self' data:",
               "object-src 'none'",
