@@ -1,5 +1,6 @@
 // GET /api/playlists/:id — curated playlist, tracks ALWAYS in sourcePosition order
 import { NextRequest, NextResponse } from "next/server";
+import { getSessionUser } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { describePlaylistAccess } from "@/lib/playlist-auth";
 
@@ -11,6 +12,14 @@ export async function GET(
   const curated = db.getCuratedPlaylist(id);
   if (!curated) {
     return NextResponse.json({ error: "Playlist not found." }, { status: 404 });
+  }
+  // Same visibility rule as shares: a private share's playlist stays private.
+  const share = db.getShareByResourceId(id);
+  if (share) {
+    const viewer = await getSessionUser();
+    if (!db.isShareVisibleTo(share, viewer?.id)) {
+      return NextResponse.json({ error: "This playlist is private." }, { status: 403 });
+    }
   }
   const uncategorized = curated.tracks.filter((t) => !t.categoryId);
   const { ownerId, isOwner } = await describePlaylistAccess(id);

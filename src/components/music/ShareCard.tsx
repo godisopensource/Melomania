@@ -2,8 +2,10 @@
 
 import React, { useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { MusicShare } from "@/types";
 import { usePlayer } from "../providers/PlayerProvider";
+import { useAuth } from "../providers/AuthProvider";
 import { formatTime, formatRelativeDate } from "@/lib/utils";
 import { ExportModal } from "../export/ExportModal";
 import {
@@ -16,18 +18,27 @@ import {
   Disc,
   Check,
   ExternalLink,
+  Trash2,
+  Loader2,
 } from "lucide-react";
 
 interface ShareCardProps {
   share: MusicShare;
+  onDeleted?: (id: string) => void;
 }
 
-export function ShareCard({ share }: ShareCardProps) {
+export function ShareCard({ share, onDeleted }: ShareCardProps) {
+  const router = useRouter();
   const { currentTrack, isPlaying, playTrack, togglePlay } = usePlayer();
+  const { user } = useAuth();
   const [exportOpen, setExportOpen] = useState(false);
   const [likes, setLikes] = useState(share.likesCount || 0);
-  const [hasLiked, setHasLiked] = useState(false);
+  const [hasLiked, setHasLiked] = useState(!!share.hasLiked);
+  const [likeBusy, setLikeBusy] = useState(false);
   const [copiedLink, setCopiedLink] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+
+  const isOwner = !!user && (user.id === share.authorId || user.role === "admin");
 
   const resource = share.resource;
   if (!resource) return null;
@@ -47,13 +58,40 @@ export function ShareCard({ share }: ShareCardProps) {
     }
   };
 
-  const handleLikeToggle = () => {
-    if (hasLiked) {
-      setLikes((prev) => prev - 1);
-      setHasLiked(false);
-    } else {
-      setLikes((prev) => prev + 1);
-      setHasLiked(true);
+  const handleLikeToggle = async () => {
+    if (!user) return;
+    if (likeBusy) return;
+    // Optimistic update, reconciled with the server (persisted likes).
+    const prevLiked = hasLiked;
+    const prevCount = likes;
+    setHasLiked(!prevLiked);
+    setLikes((p) => p + (prevLiked ? -1 : 1));
+    setLikeBusy(true);
+    try {
+      const res = await fetch(`/api/shares/${share.id}/like`, { method: "POST" });
+      if (!res.ok) throw new Error("like failed");
+      const data = await res.json();
+      setLikes(data.share?.likesCount ?? prevCount + (prevLiked ? -1 : 1));
+      setHasLiked(!!data.liked);
+    } catch {
+      setHasLiked(prevLiked);
+      setLikes(prevCount);
+    } finally {
+      setLikeBusy(false);
+    }
+  };
+
+  const handleDelete = async () => {
+    if (!isOwner || deleting) return;
+    if (!window.confirm("Delete this share? Its discussion will be removed too.")) return;
+    setDeleting(true);
+    try {
+      const res = await fetch(`/api/shares/${share.id}`, { method: "DELETE" });
+      if (!res.ok) throw new Error("delete failed");
+      if (onDeleted) onDeleted(share.id);
+      else router.refresh();
+    } catch {
+      setDeleting(false);
     }
   };
 
@@ -94,9 +132,21 @@ export function ShareCard({ share }: ShareCardProps) {
             </div>
           </Link>
 
-          <span className="rounded border border-border bg-white/5 px-2 py-0.5 text-[10px] font-medium text-muted-foreground">
-            {share.visibility === "public" ? "Public" : "Private"}
-          </span>
+          <div className="flex items-center gap-2">
+            <span className="rounded border border-border bg-white/5 px-2 py-0.5 text-[10px] font-medium text-muted-foreground">
+              {share.visibility === "public" ? "Public" : "Private"}
+            </span>
+            {isOwner && (
+              <button
+                onClick={handleDelete}
+                disabled={deleting}
+                title="Delete this share"
+                className="rounded border border-border bg-white/5 p-1.5 text-muted-foreground hover:bg-destructive/15 hover:text-destructive transition-colors disabled:opacity-50"
+              >
+              {deleting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
+              </button>
+            )}
+          </div>
         </div>
 
         {/* Intro Comment */}
@@ -193,7 +243,9 @@ export function ShareCard({ share }: ShareCardProps) {
           <div className="flex items-center gap-2">
             <button
               onClick={handleLikeToggle}
-              className={`flex items-center gap-1 rounded px-2.5 py-1 text-xs font-medium transition-colors ${
+              disabled={likeBusy}
+              title={user ? (hasLiked ? "Unlike" : "Like") : "Sign in to like"}
+              className={`flex items-center gap-1 rounded px-2.5 py-1 text-xs font-medium transition-colors disabled:opacity-60 ${
                 hasLiked
                   ? "bg-brand-500/20 text-brand-320"
                   : "bg-white/5 text-muted-foreground hover:bg-white/10 hover:text-foreground"

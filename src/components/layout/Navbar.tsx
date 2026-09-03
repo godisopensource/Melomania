@@ -45,6 +45,8 @@ export function Navbar() {
       } catch (e) {}
     };
     fetchNotifs();
+    const timer = setInterval(fetchNotifs, 30000);
+    return () => clearInterval(timer);
   }, [user]);
 
   useEffect(() => {
@@ -64,6 +66,28 @@ export function Navbar() {
     }, 250);
     return () => clearTimeout(timer);
   }, [searchQuery]);
+
+  const notifHref = (notif: Notification): string | null => {
+    if (notif.shareId) return `/share/${notif.shareId}`;
+    return null;
+  };
+
+  const handleNotifClick = async (notif: Notification) => {
+    try {
+      await fetch("/api/notifications", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: notif.id }),
+      });
+      setNotifications((prev) => prev.map((n) => (n.id === notif.id ? { ...n, isRead: true } : n)));
+      setUnreadCount((c) => Math.max(0, c - (notif.isRead ? 0 : 1)));
+    } catch {}
+    const href = notifHref(notif);
+    if (href) {
+      setNotifOpen(false);
+      router.push(href);
+    }
+  };
 
   const handleMarkAllRead = async () => {
     try {
@@ -211,22 +235,27 @@ export function Navbar() {
                         No notifications
                       </p>
                     ) : (
-                      notifications.slice(0, 5).map((notif) => (
-                        <div
-                          key={notif.id}
-                          className={`rounded-lg p-2.5 text-xs transition-colors ${
-                            notif.isRead ? "bg-white/5" : "bg-brand-500/10 border border-brand-500/20"
-                          }`}
-                        >
-                          <p className="text-foreground font-medium">{notif.message}</p>
-                          <span className="text-[10px] text-muted-foreground mt-1 block">
-                            {new Date(notif.createdAt).toLocaleTimeString("en-US", {
-                              hour: "2-digit",
-                              minute: "2-digit",
-                            })}
-                          </span>
-                        </div>
-                      ))
+                      notifications.slice(0, 8).map((notif) => {
+                        const href = notifHref(notif);
+                        return (
+                          <button
+                            key={notif.id}
+                            onClick={() => handleNotifClick(notif)}
+                            className={`w-full rounded-lg p-2.5 text-left text-xs transition-colors ${
+                              notif.isRead ? "bg-white/5" : "bg-brand-500/10 border border-brand-500/20"
+                            } ${href ? "hover:bg-white/10 cursor-pointer" : ""}`}
+                          >
+                            <p className="text-foreground font-medium">{notif.message}</p>
+                            <span className="text-[10px] text-muted-foreground mt-1 block">
+                              {new Date(notif.createdAt).toLocaleTimeString("en-US", {
+                                hour: "2-digit",
+                                minute: "2-digit",
+                              })}
+                              {href ? " · open" : ""}
+                            </span>
+                          </button>
+                        );
+                      })
                     )}
                   </div>
                 </div>

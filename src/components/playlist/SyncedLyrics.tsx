@@ -64,6 +64,15 @@ export function SyncedLyrics({ artist, title, album, durationSeconds, overlay = 
   useEffect(() => {
     let cancelled = false;
     const load = async () => {
+      // Guard: without artist/title there is nothing to search — fail fast
+      // instead of leaving the panel in a perpetual loading state.
+      if (!artist?.trim() || !title?.trim()) {
+        setLines(null);
+        setPlain(null);
+        setError("No lyrics found for this track.");
+        setLoading(false);
+        return;
+      }
       setLoading(true);
       setError(null);
       setLines(null);

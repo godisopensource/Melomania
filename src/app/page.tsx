@@ -1,8 +1,9 @@
 "use client";
 // src/app/page.tsx — Racine : page d'accueil (/)
 
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, Suspense } from "react";
 import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 import { MusicShare } from "@/types";
 import { ShareCard } from "@/components/music/ShareCard";
 import { useAuth } from "@/components/providers/AuthProvider";
@@ -12,10 +13,21 @@ import {
   Compass,
   Headphones,
   Music,
+  X,
 } from "lucide-react";
 
 export default function HomePage() {
+  return (
+    <Suspense fallback={<div className="space-y-3">{[1, 2].map((i) => (<div key={i} className="h-48 w-full animate-pulse rounded-2xl border border-border bg-card/40" />))}</div>}>
+      <HomeFeed />
+    </Suspense>
+  );
+}
+
+function HomeFeed() {
   const { user, openAuthModal } = useAuth();
+  const searchParams = useSearchParams();
+  const activeTag = searchParams.get("tag")?.trim().toLowerCase() || null;
   const [shares, setShares] = useState<MusicShare[]>([]);
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<"all" | "tracks" | "playlists">("all");
@@ -40,8 +52,12 @@ export default function HomePage() {
   }, []);
 
   const filteredShares = shares.filter((s) => {
-    if (activeTab === "tracks") return s.resource?.type === "track";
-    if (activeTab === "playlists") return s.resource?.type === "playlist";
+    if (activeTab === "tracks" && s.resource?.type !== "track") return false;
+    if (activeTab === "playlists" && s.resource?.type !== "playlist") return false;
+    if (activeTag) {
+      const tags = (s.tags || []).map((t) => t.toLowerCase().replace(/^#/, ""));
+      if (!tags.includes(activeTag)) return false;
+    }
     return true;
   });
 
@@ -88,6 +104,15 @@ export default function HomePage() {
         <div className="flex items-center gap-2">
           <Flame className="h-4 w-4 text-brand-500" />
           <h2 className="text-sm font-bold text-foreground">Recent music feed</h2>
+          {activeTag && (
+            <Link
+              href="/"
+              className="inline-flex items-center gap-1 rounded-full bg-brand-500/15 px-2.5 py-1 text-[11px] font-semibold text-brand-320 hover:bg-brand-500/25"
+            >
+              #{activeTag}
+              <X className="h-3 w-3" />
+            </Link>
+          )}
         </div>
 
         <div className="flex items-center gap-1 rounded-lg border border-border bg-black/40 p-1">
@@ -151,7 +176,13 @@ export default function HomePage() {
             </Link>
           </div>
         ) : (
-          filteredShares.map((share) => <ShareCard key={share.id} share={share} />)
+          filteredShares.map((share) => (
+            <ShareCard
+              key={share.id}
+              share={share}
+              onDeleted={(id) => setShares((prev) => prev.filter((s) => s.id !== id))}
+            />
+          ))
         )}
       </div>
     </div>

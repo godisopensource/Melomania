@@ -16,7 +16,10 @@ export async function GET(req: NextRequest) {
   const authorId = searchParams.get("authorId");
   const visibility = searchParams.get("visibility");
 
-  let shares = db.getMusicShares();
+  const viewer = await getSessionUser();
+  const viewerId = viewer?.id;
+
+  let shares = db.getMusicShares(viewerId);
 
   if (authorId) {
     shares = shares.filter((s) => s.authorId === authorId);
@@ -25,6 +28,10 @@ export async function GET(req: NextRequest) {
   if (visibility) {
     shares = shares.filter((s) => s.visibility === visibility);
   }
+
+  // Private shares are only visible to their author, invited users and participants.
+  // Public stays the default feed.
+  shares = shares.filter((s) => db.isShareVisibleTo(s, viewerId));
 
   return NextResponse.json({ shares });
 }
@@ -42,10 +49,48 @@ export async function POST(req: NextRequest) {
       introductoryComment,
       visibility = "public",
       tags = [],
+      sharedWithUsername,
+      sharedWithUsernames,
     } = body;
 
     if (!url) {
       return NextResponse.json({ error: "URL is required." }, { status: 400 });
+    }
+
+    const safeVisibility = visibility === "private" ? "private" : "public";
+
+    // Private shares can be kept for oneself or explicitly shared with
+    // one or several users (by username).
+    const rawNames: string[] = [];
+    if (typeof sharedWithUsername === "string" && sharedWithUsername.trim()) {
+      rawNames.push(sharedWithUsername.trim());
+    }
+    if (Array.isArray(sharedWithUsernames)) {
+      for (const n of sharedWithUsernames) {
+        if (typeof n === "string" && n.trim()) rawNames.push(n.trim());
+      }
+    }
+    const invitedUsers: { id: string; username: string }[] = [];
+    const unknownUsernames: string[] = [];
+    if (safeVisibility === "private" && rawNames.length > 0) {
+      const seen = new Set<string>();
+      for (const name of rawNames) {
+        const clean = name.replace(/^@/, "").slice(0, 30);
+        if (!clean || seen.has(clean.toLowerCase())) continue;
+        seen.add(clean.toLowerCase());
+        const found = db.getUserByUsername(clean);
+        if (!found) {
+          unknownUsernames.push(clean);
+        } else if (found.id !== user.id) {
+          invitedUsers.push({ id: found.id, username: found.username });
+        }
+      }
+      if (unknownUsernames.length > 0) {
+        return NextResponse.json(
+          { error: `User not found: @${unknownUsernames.join(", @")}` },
+          { status: 404 }
+        );
+      }
     }
 
     const now = new Date().toISOString();
@@ -207,7 +252,7 @@ export async function POST(req: NextRequest) {
       id: conversationId,
       createdById: user.id,
       title: threadTitle,
-      visibility,
+      visibility: safeVisibility,
       shareId,
       participantsCount: 1,
       lastActivityAt: now,
@@ -229,14 +274,39 @@ export async function POST(req: NextRequest) {
       authorId: user.id,
       resourceId,
       introductoryComment,
-      visibility,
+      visibility: safeVisibility,
       conversationId,
       likesCount: 0,
+      likedByUserIds: [],
+      allowedUserIds: invitedUsers.map((u) => u.id),
       tags: Array.isArray(tags) ? tags : [],
       createdAt: now,
       updatedAt: now,
     };
     const createdShare = db.createMusicShare(share);
+
+    // Invite the explicitly shared-with users: participant + notification.
+    for (const invited of invitedUsers) {
+      db.addParticipant({
+        id: `part_${Date.now()}_${rand()}`,
+        conversationId,
+        userId: invited.id,
+        role: "member",
+        joinedAt: now,
+      });
+      db.createNotification({
+        id: `notif_${Date.now()}_${rand()}`,
+        recipientId: invited.id,
+        actorId: user.id,
+        type: "share_invitation",
+        conversationId,
+        shareId,
+        musicResourceId: resourceId,
+        isRead: false,
+        message: `${user.displayName} shared a private track with you: ${threadTitle}`,
+        createdAt: now,
+      });
+    }
 
     if (introductoryComment?.trim()) {
       db.createComment({

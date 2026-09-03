@@ -1,6 +1,6 @@
 "use client";
 
-import React from "react";
+import React, { useEffect, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useAuth } from "../providers/AuthProvider";
@@ -16,11 +16,26 @@ import {
   Music,
   LayoutGrid,
   Disc3,
+  Tag as TagIcon,
 } from "lucide-react";
 
 export function Sidebar() {
   const pathname = usePathname();
   const { user } = useAuth();
+  const [topTags, setTopTags] = useState<{ tag: string; count: number }[]>([]);
+
+  useEffect(() => {
+    const load = async () => {
+      try {
+        const res = await fetch("/api/tags?limit=12");
+        if (res.ok) {
+          const data = await res.json();
+          setTopTags(data.tags || []);
+        }
+      } catch {}
+    };
+    load();
+  }, [pathname]);
 
   const navItems = [
     { label: "Activity feed", href: "/", icon: Flame },
@@ -95,27 +110,31 @@ export function Sidebar() {
               );
             })}
           </div>
-          <p className="px-3 text-[10px] leading-relaxed text-muted-foreground/70">
-            Original playlist order, always.
-          </p>
         </div>
 
         <div className="space-y-2">
           <span className="px-3 text-xs font-semibold text-muted-foreground">
-            Genres & styles
+            Popular tags
           </span>
-          <div className="flex flex-wrap gap-1.5 px-2">
-            {["French Touch", "Synthwave", "Funk", "Progressive Rock", "Electro", "Soundtracks"].map(
-              (genre) => (
-                <span
-                  key={genre}
-                  className="rounded-md border border-border bg-white/5 px-2.5 py-1 text-[11px] font-medium text-muted-foreground hover:border-brand-500/40 hover:text-brand-320 transition-colors cursor-pointer"
+          {topTags.length === 0 ? (
+            <p className="px-3 text-[11px] text-muted-foreground/70">
+              No tags yet — add some when sharing.
+            </p>
+          ) : (
+            <div className="flex flex-wrap gap-1.5 px-2">
+              {topTags.map(({ tag, count }) => (
+                <Link
+                  key={tag}
+                  href={`/?tag=${encodeURIComponent(tag)}`}
+                  className="inline-flex items-center gap-1 rounded-md border border-border bg-white/5 px-2.5 py-1 text-[11px] font-medium text-muted-foreground hover:border-brand-500/40 hover:text-brand-320 transition-colors"
                 >
-                  {genre}
-                </span>
-              )
-            )}
-          </div>
+                  <TagIcon className="h-3 w-3" aria-hidden="true" />
+                  {tag}
+                  <span className="font-mono text-[10px] opacity-70">{count}</span>
+                </Link>
+              ))}
+            </div>
+          )}
         </div>
       </div>
 

@@ -28,6 +28,7 @@ export default function NewSharePage() {
   const [previewData, setPreviewData] = useState<any>(null);
   const [introComment, setIntroComment] = useState("");
   const [visibility, setVisibility] = useState<"public" | "private">("public");
+  const [sharedWithUsername, setSharedWithUsername] = useState("");
   const [tagsInput, setTagsInput] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -124,6 +125,9 @@ export default function NewSharePage() {
           introductoryComment: introComment.trim(),
           visibility,
           tags,
+          ...(visibility === "private" && sharedWithUsername.trim()
+            ? { sharedWithUsername: sharedWithUsername.trim().replace(/^@/, "") }
+            : {}),
         }),
       });
 
@@ -317,6 +321,25 @@ export default function NewSharePage() {
                 <span>Private</span>
               </button>
             </div>
+            <p className="text-[11px] text-muted-foreground">
+              {visibility === "public"
+                ? "Public is the default: everyone can see this share."
+                : "Private stays only for you — unless you invite someone below."}
+            </p>
+            {visibility === "private" && (
+              <div className="space-y-1 pt-1">
+                <label className="text-[11px] font-semibold text-muted-foreground">
+                  Share with a specific user (optional)
+                </label>
+                <input
+                  type="text"
+                  value={sharedWithUsername}
+                  onChange={(e) => setSharedWithUsername(e.target.value)}
+                  placeholder="@username"
+                  className="w-full rounded-lg border border-border bg-black/40 py-2 px-3 text-xs text-foreground focus:border-brand-500 focus:outline-none"
+                />
+              </div>
+            )}
           </div>
 
           <div className="rounded-2xl border border-border bg-card p-4 space-y-2">

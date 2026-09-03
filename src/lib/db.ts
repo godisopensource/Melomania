@@ -354,25 +354,112 @@ class MelomaniaDatabase {
   }
 
   // --- MUSIC SHARES ---
-  getMusicShares(): MusicShare[] {
-    return this.data.musicShares.map((share) => this.hydrateShare(share));
+  getMusicShares(viewerId?: string): MusicShare[] {
+    return this.data.musicShares.map((share) => this.hydrateShare(share, viewerId));
   }
 
-  getMusicShareById(id: string): MusicShare | undefined {
+  getMusicShareById(id: string, viewerId?: string): MusicShare | undefined {
     const share = this.data.musicShares.find((s) => s.id === id);
-    return share ? this.hydrateShare(share) : undefined;
+    return share ? this.hydrateShare(share, viewerId) : undefined;
   }
 
-  getMusicSharesByAuthorId(authorId: string): MusicShare[] {
+  getMusicSharesByAuthorId(authorId: string, viewerId?: string): MusicShare[] {
     return this.data.musicShares
       .filter((s) => s.authorId === authorId)
-      .map((s) => this.hydrateShare(s));
+      .map((s) => this.hydrateShare(s, viewerId));
   }
 
   createMusicShare(share: MusicShare): MusicShare {
+    // Defaults for new persistence fields (non-destructive for legacy data)
+    if (!share.likedByUserIds) share.likedByUserIds = [];
+    if (!share.allowedUserIds) share.allowedUserIds = [];
+    if (share.likesCount === undefined) share.likesCount = 0;
     this.data.musicShares.unshift(share);
     this.persist();
     return this.hydrateShare(share);
+  }
+
+  updateMusicShare(id: string, updates: Partial<MusicShare>): MusicShare | null {
+    const share = this.data.musicShares.find((s) => s.id === id);
+    if (!share) return null;
+    // Likes are only mutated via toggleShareLike — never by a raw update.
+    const { likedByUserIds: _l, likesCount: _c, ...safe } = updates as any;
+    Object.assign(share, safe, { updatedAt: new Date().toISOString() });
+    this.persist();
+    return this.hydrateShare(share);
+  }
+
+  /** Toggle a like. Returns the hydrated share + whether the user now likes it. */
+  toggleShareLike(shareId: string, userId: string): { share: MusicShare; liked: boolean } | null {
+    const share = this.data.musicShares.find((s) => s.id === shareId);
+    if (!share) return null;
+    if (!share.likedByUserIds) share.likedByUserIds = [];
+    const idx = share.likedByUserIds.indexOf(userId);
+    let liked: boolean;
+    if (idx >= 0) {
+      share.likedByUserIds.splice(idx, 1);
+      liked = false;
+    } else {
+      share.likedByUserIds.push(userId);
+      liked = true;
+    }
+    share.likesCount = share.likedByUserIds.length;
+    share.updatedAt = new Date().toISOString();
+    this.persist();
+    return { share: this.hydrateShare(share, userId), liked };
+  }
+
+  /** A share is visible to viewerId when public, or when author / explicitly allowed / participant. */
+  isShareVisibleTo(share: MusicShare, viewerId?: string | null): boolean {
+    if (share.visibility === "public") return true;
+    if (!viewerId) return false;
+    if (share.authorId === viewerId) return true;
+    if (share.allowedUserIds?.includes(viewerId)) return true;
+    const isParticipant = this.data.conversationParticipants.some(
+      (p) => p.conversationId === share.conversationId && p.userId === viewerId
+    );
+    if (isParticipant) return true;
+    return false;
+  }
+
+  /** Most used tags across shares + track enrichments. */
+  getTopTags(limit = 12): { tag: string; count: number }[] {
+    const counts = new Map<string, number>();
+    const add = (tags?: string[]) => {
+      for (const raw of tags || []) {
+        const t = raw.trim().toLowerCase().replace(/^#/, "").slice(0, 40);
+        if (!t) continue;
+        counts.set(t, (counts.get(t) || 0) + 1);
+      }
+    };
+    for (const s of this.data.musicShares) add(s.tags);
+    for (const e of this.data.trackEnrichments) add(e.tags);
+    for (const r of this.data.musicResources) add(r.tags);
+    return [...counts.entries()]
+      .map(([tag, count]) => ({ tag, count }))
+      .sort((a, b) => b.count - a.count || a.tag.localeCompare(b.tag))
+      .slice(0, Math.max(1, Math.min(30, limit)));
+  }
+
+  /** Delete a share + its conversation (participants, comments, mentions). Keeps music resources. */
+  deleteShareCascade(id: string): boolean {
+    const share = this.data.musicShares.find((s) => s.id === id);
+    if (!share) return false;
+    const convId = share.conversationId;
+    this.data.musicShares = this.data.musicShares.filter((s) => s.id !== id);
+    this.data.conversationThreads = this.data.conversationThreads.filter((t) => t.id !== convId);
+    this.data.conversationParticipants = this.data.conversationParticipants.filter(
+      (p) => p.conversationId !== convId
+    );
+    const commentIds = new Set(
+      this.data.comments.filter((c) => c.conversationId === convId).map((c) => c.id)
+    );
+    this.data.comments = this.data.comments.filter((c) => c.conversationId !== convId);
+    if (commentIds.size > 0) {
+      this.data.mentions = this.data.mentions.filter((m) => !commentIds.has(m.commentId));
+    }
+    this.persist();
+    return true;
   }
 
   deleteMusicShare(id: string): boolean {
@@ -382,9 +469,14 @@ class MelomaniaDatabase {
     return this.data.musicShares.length !== initialLen;
   }
 
-  private hydrateShare(share: MusicShare): MusicShare {
+  private hydrateShare(share: MusicShare, viewerId?: string): MusicShare {
+    const likedBy = share.likedByUserIds || [];
+    const { likedByUserIds: _omit, ...rest } = share as any;
+    void _omit;
     return {
-      ...share,
+      ...rest,
+      likesCount: likedBy.length,
+      hasLiked: viewerId ? likedBy.includes(viewerId) : false,
       author: publicAuthor(this.getUserById(share.authorId)),
       resource: this.getMusicResourceById(share.resourceId),
       sources: this.getMusicSourcesByResourceId(share.resourceId),

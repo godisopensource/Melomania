@@ -17,6 +17,8 @@ export type NotificationType =
   | 'user_mention'
   | 'music_mention'
   | 'conversation_invitation'
+  | 'share_like'
+  | 'share_invitation'
   | 'export_completed'
   | 'export_warning'
   | 'import_error';
@@ -181,6 +183,12 @@ export interface MusicShare {
   visibility: ShareVisibility;
   conversationId: string;
   likesCount?: number;
+  /** User ids that liked this share (persisted). */
+  likedByUserIds?: string[];
+  /** Whether the current viewer liked it (computed server-side, never stored). */
+  hasLiked?: boolean;
+  /** Private shares: user ids explicitly invited (besides the author). */
+  allowedUserIds?: string[];
   tags?: string[];
   createdAt: string;
   updatedAt: string;
@@ -314,6 +322,7 @@ export interface Notification {
   commentId?: string;
   musicResourceId?: string;
   musicResource?: MusicResource;
+  shareId?: string;
   isRead: boolean;
   message?: string;
   createdAt: string;

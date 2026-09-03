@@ -1,9 +1,10 @@
 "use client";
 // src/app/profile/[username]/page.tsx — /profile/:username : public user profile
 
-import React, { useState, useEffect, use } from "react";
+import React, { useState, useEffect, use, useRef } from "react";
 import Link from "next/link";
 import { User, MusicShare, Comment } from "@/types";
+import { useAuth } from "@/components/providers/AuthProvider";
 import { formatTime, formatRelativeDate } from "@/lib/utils";
 import {
   Calendar,
@@ -14,6 +15,8 @@ import {
   ListMusic,
   Clock,
   Loader2,
+  Pencil,
+  Camera,
 } from "lucide-react";
 
 interface RecentComment extends Comment {
@@ -32,12 +35,21 @@ export default function UserProfilePage({
   params: Promise<{ username: string }>;
 }) {
   const { username } = use(params);
+  const { user: sessionUser, refresh } = useAuth();
 
   const [profileUser, setProfileUser] = useState<User | null>(null);
+  const [isSelf, setIsSelf] = useState(false);
   const [userShares, setUserShares] = useState<MusicShare[]>([]);
   const [recentComments, setRecentComments] = useState<RecentComment[]>([]);
   const [loading, setLoading] = useState(true);
   const [notFound, setNotFound] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const [editDisplayName, setEditDisplayName] = useState("");
+  const [editBio, setEditBio] = useState("");
+  const [editAvatarUrl, setEditAvatarUrl] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const fileRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     const fetchProfile = async () => {
@@ -52,8 +64,14 @@ export default function UserProfilePage({
         if (res.ok) {
           const data = await res.json();
           setProfileUser(data.user || null);
+          setIsSelf(!!data.isSelf);
           setUserShares(data.shares || []);
           setRecentComments(data.recentComments || []);
+          if (data.user) {
+            setEditDisplayName(data.user.displayName || "");
+            setEditBio(data.user.bio || "");
+            setEditAvatarUrl(data.user.avatarUrl || "");
+          }
           if (!data.user) setNotFound(true);
         }
       } catch (e) {
@@ -65,6 +83,50 @@ export default function UserProfilePage({
 
     fetchProfile();
   }, [username]);
+
+  const handleAvatarFile = (file: File | undefined) => {
+    if (!file) return;
+    if (!file.type.startsWith("image/")) {
+      setSaveError("Please choose an image file.");
+      return;
+    }
+    if (file.size > 2 * 1024 * 1024) {
+      setSaveError("Image must be under 2MB.");
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => {
+      if (typeof reader.result === "string") setEditAvatarUrl(reader.result);
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const handleSave = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!profileUser || saving) return;
+    setSaving(true);
+    setSaveError(null);
+    try {
+      const res = await fetch(`/api/users/${encodeURIComponent(profileUser.username)}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          displayName: editDisplayName.trim(),
+          bio: editBio.trim(),
+          avatarUrl: editAvatarUrl.trim(),
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Unable to save profile.");
+      setProfileUser(data.user);
+      setEditing(false);
+      await refresh();
+    } catch (err: any) {
+      setSaveError(err.message);
+    } finally {
+      setSaving(false);
+    }
+  };
 
   const renderBody = (text: string) =>
     text.split(/(@[a-zA-Z0-9_-]+|\[\d{1,3}:\d{2}(?::\d{2})?\])/g).map((part, i) => {
@@ -139,12 +201,100 @@ export default function UserProfilePage({
           />
 
           <div className="flex-1 space-y-2">
-            <h1 className="text-2xl font-black text-foreground">{profileUser?.displayName}</h1>
+            <div className="flex flex-wrap items-center justify-center sm:justify-start gap-2">
+              <h1 className="text-2xl font-black text-foreground">{profileUser?.displayName}</h1>
+              {isSelf && !editing && (
+                <button
+                  onClick={() => setEditing(true)}
+                  className="inline-flex items-center gap-1 rounded-lg border border-border bg-white/5 px-2 py-1 text-[11px] font-semibold text-muted-foreground hover:text-foreground"
+                >
+                  <Pencil className="h-3 w-3" />
+                  Edit profile
+                </button>
+              )}
+            </div>
             <p className="text-xs font-semibold text-primary font-mono">@{profileUser?.username}</p>
-            {profileUser?.bio && (
+            {profileUser?.bio && !editing && (
               <p className="text-xs text-muted-foreground leading-relaxed pt-1">
                 {profileUser.bio}
               </p>
+            )}
+
+            {isSelf && editing && (
+              <form onSubmit={handleSave} className="rounded-2xl border border-border bg-black/40 p-4 space-y-3 text-left">
+                <div className="space-y-1">
+                  <label className="text-[11px] font-semibold text-muted-foreground">Display name</label>
+                  <input
+                    value={editDisplayName}
+                    onChange={(e) => setEditDisplayName(e.target.value)}
+                    maxLength={40}
+                    className="w-full rounded-lg border border-border bg-black/40 py-2 px-3 text-xs text-foreground focus:border-brand-500 focus:outline-none"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-[11px] font-semibold text-muted-foreground">Bio (max 300)</label>
+                  <textarea
+                    value={editBio}
+                    onChange={(e) => setEditBio(e.target.value)}
+                    maxLength={300}
+                    rows={3}
+                    placeholder="Tell us about your music taste…"
+                    className="w-full rounded-lg border border-border bg-black/40 py-2 px-3 text-xs text-foreground focus:border-brand-500 focus:outline-none"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-[11px] font-semibold text-muted-foreground">Profile picture</label>
+                  <div className="flex items-center gap-2">
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    {editAvatarUrl && <img src={editAvatarUrl} alt="" className="h-10 w-10 rounded-full object-cover ring-1 ring-border" />}
+                    <input
+                      value={editAvatarUrl.startsWith("data:") ? "" : editAvatarUrl}
+                      onChange={(e) => setEditAvatarUrl(e.target.value)}
+                      placeholder="https://…"
+                      className="flex-1 rounded-lg border border-border bg-black/40 py-2 px-3 text-xs text-foreground focus:border-brand-500 focus:outline-none"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => fileRef.current?.click()}
+                      className="inline-flex items-center gap-1 rounded-lg border border-border bg-white/5 px-2.5 py-2 text-[11px] font-semibold text-foreground hover:bg-white/10"
+                    >
+                      <Camera className="h-3.5 w-3.5" />
+                      Upload
+                    </button>
+                    <input
+                      ref={fileRef}
+                      type="file"
+                      accept="image/*"
+                      className="hidden"
+                      onChange={(e) => handleAvatarFile(e.target.files?.[0])}
+                    />
+                  </div>
+                  <p className="text-[10px] text-muted-foreground">Paste an image URL or upload a file (under 2MB).</p>
+                </div>
+                {saveError && <p className="text-[11px] text-destructive">{saveError}</p>}
+                <div className="flex gap-2">
+                  <button
+                    type="submit"
+                    disabled={saving}
+                    className="rounded-lg bg-brand-500 px-3 py-1.5 text-xs font-semibold text-white hover:bg-brand-590 disabled:opacity-50"
+                  >
+                    {saving ? "Saving…" : "Save"}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setEditing(false);
+                      setEditDisplayName(profileUser?.displayName || "");
+                      setEditBio(profileUser?.bio || "");
+                      setEditAvatarUrl(profileUser?.avatarUrl || "");
+                      setSaveError(null);
+                    }}
+                    className="rounded-lg border border-border bg-white/5 px-3 py-1.5 text-xs font-semibold text-muted-foreground hover:text-foreground"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </form>
             )}
 
             <div className="flex flex-wrap items-center justify-center sm:justify-start gap-4 text-xs text-muted-foreground pt-2">

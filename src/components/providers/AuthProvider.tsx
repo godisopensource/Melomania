@@ -16,6 +16,7 @@ interface AuthContextType {
     "cf-turnstile-response"?: string;
   }) => Promise<{ success: boolean; error?: string }>;
   logout: () => Promise<void>;
+  refresh: () => Promise<void>;
   openAuthModal: (mode?: "login" | "register") => void;
   closeAuthModal: () => void;
   authModalOpen: boolean;
@@ -42,6 +43,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     } finally {
       setIsLoading(false);
     }
+  };
+
+  const refresh = async () => {
+    await refreshUser();
   };
 
   useEffect(() => {
@@ -125,6 +130,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         login,
         register,
         logout,
+        refresh,
         openAuthModal,
         closeAuthModal,
         authModalOpen,

@@ -22,7 +22,8 @@ export async function GET(
 
   // Email visible uniquement par soi-même, jamais de hash.
   const user = isSelf ? toSafeUser(found) : toPublicUser(found);
-  const shares = db.getMusicSharesByAuthorId(found.id);
+  const allShares = db.getMusicSharesByAuthorId(found.id, session?.id);
+  const shares = allShares.filter((s) => db.isShareVisibleTo(s, session?.id));
   const recentComments = db.getRecentCommentsByUserId(found.id, 3).map((c) => {
     const thread = db.getConversationThreadById(c.conversationId);
     const share = thread?.shareId ? db.getMusicShareById(thread.shareId) : undefined;
@@ -42,4 +43,53 @@ export async function GET(
   });
 
   return NextResponse.json({ user, shares, recentComments, isSelf });
+}
+
+export async function PATCH(
+  req: NextRequest,
+  { params }: { params: Promise<{ username: string }> }
+) {
+  const session = await getSessionUser();
+  if (!session) {
+    return NextResponse.json({ error: "You must be signed in." }, { status: 401 });
+  }
+  const { username } = await params;
+  const found = db.getUserByUsername(decodeURIComponent(username).slice(0, 30));
+  if (!found) {
+    return NextResponse.json({ error: "User not found." }, { status: 404 });
+  }
+  if (found.id !== session.id && session.role !== "admin") {
+    return NextResponse.json({ error: "Permission denied." }, { status: 403 });
+  }
+  try {
+    const body = await req.json();
+    const updates: Partial<typeof found> = {};
+    if (typeof body.displayName === "string") {
+      const clean = body.displayName.trim().slice(0, 40);
+      if (!clean) return NextResponse.json({ error: "Display name cannot be empty." }, { status: 400 });
+      if (/[<>]/.test(clean)) return NextResponse.json({ error: "Display name must not contain < or >." }, { status: 400 });
+      updates.displayName = clean;
+    }
+    if (typeof body.bio === "string") {
+      const clean = body.bio.trim().slice(0, 300);
+      updates.bio = clean;
+    }
+    if (typeof body.avatarUrl === "string") {
+      const clean = body.avatarUrl.trim().slice(0, 2000000);
+      if (clean && !clean.startsWith("http://") && !clean.startsWith("https://") && !clean.startsWith("data:image/")) {
+        return NextResponse.json({ error: "Avatar must be an https URL or an uploaded image." }, { status: 400 });
+      }
+      if (clean) updates.avatarUrl = clean;
+    }
+    if (typeof body.isPublic === "boolean") {
+      updates.isPublic = body.isPublic;
+    }
+    const updated = db.updateUser(found.id, updates);
+    if (!updated) return NextResponse.json({ error: "User not found." }, { status: 404 });
+    const isSelf = session.id === found.id;
+    const user = isSelf ? toSafeUser(updated) : toPublicUser(updated);
+    return NextResponse.json({ user });
+  } catch {
+    return NextResponse.json({ error: "Unable to update profile." }, { status: 500 });
+  }
 }
