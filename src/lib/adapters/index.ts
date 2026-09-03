@@ -1,3 +1,5 @@
+// src/lib/adapters/index.ts — point d'entrée des adaptateurs de services musicaux
+
 import { MusicProvider } from "@/types";
 import { MusicProviderAdapter } from "./types";
 import { YouTubeAdapter } from "./youtube";

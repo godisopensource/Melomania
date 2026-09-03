@@ -107,6 +107,52 @@ export function extractVersionLabel(text: string): string | undefined {
 }
 
 /**
+ * Extracts tags from YouTube track/playlist metadata
+ * Uses title and artist words as tags
+ */
+export function extractYouTubeTags(
+  track?: { title: string; artist: string; album?: string },
+  playlistTitle?: string
+): string[] {
+  const tags: string[] = [];
+
+  if (track) {
+    // Extract from track title - split by " - " to separate artist and title
+    const titleParts = track.title.split(" - ");
+    const artist = titleParts[0]?.trim();
+    const songTitle = titleParts.slice(1).join(" - ")?.trim() || track.title;
+
+    // Add artist name words as tags (if meaningful)
+    if (artist && artist !== "YouTube Artist") {
+      const artistWords = artist
+        .split(" ")
+        .map((w) => w.toLowerCase())
+        .filter((w) => w.length >= 3 && !["the", "and", "of", "in", "for", "you", "my", "feel"].includes(w.toLowerCase()));
+      tags.push(...artistWords.slice(0, 3));
+    }
+
+    // Add song title words as tags
+    const titleWords = songTitle
+      .split(" ")
+      .map((w) => w.replace(/[^a-zA-Z0-9]/g, "").toLowerCase())
+      .filter((w) => w.length >= 3);
+    tags.push(...titleWords.slice(0, 5));
+  }
+
+  // Add playlist title words as tags
+  if (playlistTitle) {
+    const plWords = playlistTitle
+      .split(" ")
+      .map((w) => w.toLowerCase())
+      .filter((w) => w.length >= 3);
+    tags.push(...plWords.slice(0, 5));
+  }
+
+  // Deduplicate and limit
+  return [...new Set(tags)].slice(0, 8);
+}
+
+/**
  * Extracts YouTube Video ID or Playlist ID from URL
  */
 export function parseYouTubeUrl(url: string): { videoId?: string; playlistId?: string; timecode?: number } {

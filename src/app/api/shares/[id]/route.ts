@@ -1,3 +1,5 @@
+// src/app/api/shares/[id]/route.ts — /api/shares/:id : consultation/suppression d'un partage
+
 import { NextRequest, NextResponse } from "next/server";
 import { getSessionUser } from "@/lib/auth";
 import { db } from "@/lib/db";
@@ -10,7 +12,7 @@ export async function GET(
   const share = db.getMusicShareById(id);
 
   if (!share) {
-    return NextResponse.json({ error: "Partage introuvable." }, { status: 404 });
+    return NextResponse.json({ error: "Share not found." }, { status: 404 });
   }
 
   const thread = db.getConversationThreadById(share.conversationId);
@@ -33,18 +35,18 @@ export async function DELETE(
 ) {
   const user = await getSessionUser();
   if (!user) {
-    return NextResponse.json({ error: "Non autorisé" }, { status: 401 });
+    return NextResponse.json({ error: "Not authorized" }, { status: 401 });
   }
 
   const { id } = await params;
   const share = db.getMusicShareById(id);
 
   if (!share) {
-    return NextResponse.json({ error: "Partage introuvable" }, { status: 404 });
+    return NextResponse.json({ error: "Share not found" }, { status: 404 });
   }
 
   if (share.authorId !== user.id && user.role !== "admin") {
-    return NextResponse.json({ error: "Permission refusée" }, { status: 403 });
+    return NextResponse.json({ error: "Permission denied" }, { status: 403 });
   }
 
   db.deleteMusicShare(id);

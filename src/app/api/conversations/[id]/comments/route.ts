@@ -1,3 +1,5 @@
+// src/app/api/conversations/[id]/comments/route.ts — /api/conversations/:id/comments : commentaires d'une conversation
+
 import { NextRequest, NextResponse } from "next/server";
 import { getSessionUser } from "@/lib/auth";
 import { db } from "@/lib/db";

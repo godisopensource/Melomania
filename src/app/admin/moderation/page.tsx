@@ -1,4 +1,5 @@
 "use client";
+// src/app/admin/moderation/page.tsx — /admin/moderation : panneau de modération admin
 
 import React, { useState, useEffect } from "react";
 import { useAuth } from "@/components/providers/AuthProvider";

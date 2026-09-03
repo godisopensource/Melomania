@@ -1,3 +1,5 @@
+// src/app/api/notifications/route.ts — /api/notifications : gestion des notifications
+
 import { NextRequest, NextResponse } from "next/server";
 import { getSessionUser } from "@/lib/auth";
 import { db } from "@/lib/db";
@@ -17,7 +19,7 @@ export async function GET() {
 export async function PATCH(req: NextRequest) {
   const user = await getSessionUser();
   if (!user) {
-    return NextResponse.json({ error: "Non connecté" }, { status: 401 });
+    return NextResponse.json({ error: "Not signed in" }, { status: 401 });
   }
 
   const body = await req.json();
@@ -33,5 +35,5 @@ export async function PATCH(req: NextRequest) {
     return NextResponse.json({ success: ok });
   }
 
-  return NextResponse.json({ error: "Paramètres manquants" }, { status: 400 });
+  return NextResponse.json({ error: "Missing parameters" }, { status: 400 });
 }

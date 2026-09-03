@@ -1,3 +1,5 @@
+// src/app/api/music/preview/route.ts — /api/music/preview : prévisualisation audio via YouTube
+
 import { NextRequest, NextResponse } from "next/server";
 import { YouTubeAdapter } from "@/lib/adapters/youtube";
 import { parseYouTubeUrl } from "@/lib/utils";

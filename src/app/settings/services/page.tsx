@@ -1,4 +1,5 @@
 "use client";
+// src/app/settings/services/page.tsx — /settings/services : paramètres des services musicaux
 
 import React, { useState, useEffect } from "react";
 import { useAuth } from "@/components/providers/AuthProvider";

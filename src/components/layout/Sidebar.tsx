@@ -14,6 +14,8 @@ import {
   User,
   Flame,
   Music,
+  LayoutGrid,
+  Disc3,
 } from "lucide-react";
 
 export function Sidebar() {
@@ -25,6 +27,11 @@ export function Sidebar() {
     { label: "New share", href: "/share", icon: PlusCircle, highlight: true },
     { label: "Playlists & selections", href: "/playlists", icon: ListMusic },
     { label: "Connected services", href: "/settings/services", icon: Link2 },
+  ];
+
+  const workspaceViews = [
+    { label: "Emotional map", hint: "Curator view · mood & softness curves", href: "/playlists", icon: LayoutGrid },
+    { label: "Vinyl crate", hint: "Vinyl view · original order", href: "/playlists", icon: Disc3 },
   ];
 
   if (user?.role === "admin") {
@@ -61,6 +68,36 @@ export function Sidebar() {
               );
             })}
           </nav>
+        </div>
+
+        <div className="space-y-2">
+          <span className="px-3 text-xs font-semibold text-muted-foreground">
+            Playlist workspace
+          </span>
+          <div className="space-y-1 px-0">
+            {workspaceViews.map((item) => {
+              const Icon = item.icon;
+              const isActive = pathname?.startsWith("/playlists");
+              return (
+                <Link
+                  key={item.label}
+                  href={item.href}
+                  title={item.hint}
+                  className={`melo-focus-ring flex items-center gap-2.5 rounded-lg px-3 py-2 text-xs font-semibold transition-colors ${
+                    isActive
+                      ? "bg-white/10 text-brand-320 border border-brand-500/20"
+                      : "text-muted-foreground hover:bg-white/5 hover:text-foreground"
+                  }`}
+                >
+                  <Icon className="h-4 w-4 shrink-0" aria-hidden="true" />
+                  <span>{item.label}</span>
+                </Link>
+              );
+            })}
+          </div>
+          <p className="px-3 text-[10px] leading-relaxed text-muted-foreground/70">
+            Original playlist order, always.
+          </p>
         </div>
 
         <div className="space-y-2">

@@ -33,6 +33,15 @@
     --ring: 0 54% 45%;
 
     --radius: 0.75rem;
+
+    /* ——— Melomania editorial system ——— */
+    --vinyl: 24 12% 5%;
+    --paper: 42 38% 93%;
+    --gold: 38 76% 55%;
+    --teal: 174 48% 54%;
+    --mood: #e8b34b;
+    --softness: #5ec4b6;
+    --groove: 0 0% 11%;
   }
 
   .light {
@@ -100,4 +109,111 @@
 }
 ::-webkit-scrollbar-thumb:hover {
   background: hsl(var(--muted-foreground) / 0.4);
+}
+
+/* ——— Melomania editorial textures & states ——— */
+.melo-grain {
+  background-image:
+    radial-gradient(ellipse 80% 60% at 20% 0%, hsl(var(--gold) / 0.07), transparent 60%),
+    radial-gradient(ellipse 70% 55% at 90% 100%, hsl(var(--teal) / 0.06), transparent 60%),
+    repeating-linear-gradient(0deg, hsl(0 0% 100% / 0.012) 0 1px, transparent 1px 3px);
+}
+.melo-paper-line {
+  background-image: repeating-linear-gradient(0deg, hsl(0 0% 100% / 0.05) 0 1px, transparent 1px 28px);
+}
+.melo-vinyl-shelf {
+  perspective: 1400px;
+  transform-style: preserve-3d;
+}
+.melo-vinyl-card {
+  transform: perspective(1100px) rotateX(-10deg) rotateY(-45deg) rotateZ(-8deg);
+  transform-style: preserve-3d;
+  transition: transform 0.35s cubic-bezier(0.22, 1, 0.36, 1), box-shadow 0.35s ease, filter 0.35s ease;
+}
+.melo-vinyl-card:hover,
+.melo-vinyl-card:focus-visible,
+.melo-vinyl-card[data-active="true"] {
+  transform: perspective(1100px) rotateX(-4deg) rotateY(-18deg) rotateZ(-3deg) translateZ(28px);
+}
+.melo-spine {
+  background: linear-gradient(180deg, hsl(0 0% 16%), hsl(0 0% 7%));
+  box-shadow: inset -1px 0 0 hsl(0 0% 100% / 0.08), inset 1px 0 0 hsl(0 0% 0% / 0.6);
+}
+.melo-curve-mood {
+  stroke: var(--mood);
+  filter: drop-shadow(0 0 6px hsl(var(--gold) / 0.45));
+}
+.melo-curve-soft {
+  stroke: var(--softness);
+  filter: drop-shadow(0 0 6px hsl(var(--teal) / 0.4));
+}
+.melo-focus-ring:focus-visible {
+  outline: 2px solid #af3535;
+  outline-offset: 2px;
+  border-radius: 0.5rem;
+}
+@media (prefers-reduced-motion: reduce) {
+  .melo-vinyl-card,
+  .melo-vinyl-card:hover {
+    transition: none;
+    transform: perspective(1100px) rotateX(-6deg) rotateY(-24deg) rotateZ(-4deg);
+  }
+}
+
+/* Timestamp spotlight: a timecoded comment surfaces while its moment plays */
+@keyframes melo-spotlight {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(232, 179, 75, 0); }
+  50% { box-shadow: 0 0 0 3px rgba(232, 179, 75, 0.65), 0 0 28px rgba(232, 179, 75, 0.35); }
+}
+.melo-spotlight {
+  animation: melo-spotlight 1.4s ease-in-out 4;
+  border-color: #e8b34b !important;
+}
+@media (prefers-reduced-motion: reduce) {
+  .melo-spotlight {
+    animation: none;
+    border-color: #e8b34b !important;
+  }
+}
+
+/* Dark range slider (crate zoom) */
+input[type="range"].melo-range {
+  -webkit-appearance: none;
+  appearance: none;
+  background: transparent;
+  cursor: pointer;
+}
+.melo-range::-webkit-slider-runnable-track {
+  height: 4px;
+  border-radius: 9999px;
+  background: rgba(255, 255, 255, 0.12);
+}
+.melo-range::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  margin-top: -5px;
+  height: 14px;
+  width: 14px;
+  border-radius: 9999px;
+  background: #af3535;
+  border: 2px solid #0d0b09;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.2);
+}
+.melo-range::-moz-range-track {
+  height: 4px;
+  border-radius: 9999px;
+  background: rgba(255, 255, 255, 0.12);
+}
+.melo-range::-moz-range-thumb {
+  height: 12px;
+  width: 12px;
+  border-radius: 9999px;
+  background: #af3535;
+  border: 2px solid #0d0b09;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.2);
+}
+.melo-range:focus-visible {
+  outline: 2px solid #af3535;
+  outline-offset: 4px;
+  border-radius: 9999px;
 }

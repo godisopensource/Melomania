@@ -1,3 +1,5 @@
+// src/app/api/comments/[id]/route.ts — /api/comments/:id : modification/suppression d'un commentaire
+
 import { NextRequest, NextResponse } from "next/server";
 import { getSessionUser } from "@/lib/auth";
 import { db } from "@/lib/db";
@@ -8,17 +10,17 @@ export async function PATCH(
 ) {
   const user = await getSessionUser();
   if (!user) {
-    return NextResponse.json({ error: "Non autorisé" }, { status: 401 });
+    return NextResponse.json({ error: "Not authorized" }, { status: 401 });
   }
 
   const { id } = await params;
   const comment = db.getCommentById(id);
   if (!comment) {
-    return NextResponse.json({ error: "Commentaire introuvable" }, { status: 404 });
+    return NextResponse.json({ error: "Comment not found" }, { status: 404 });
   }
 
   if (comment.authorId !== user.id && user.role !== "admin") {
-    return NextResponse.json({ error: "Action non autorisée" }, { status: 403 });
+    return NextResponse.json({ error: "Action not allowed" }, { status: 403 });
   }
 
   const body = await req.json();
@@ -37,17 +39,17 @@ export async function DELETE(
 ) {
   const user = await getSessionUser();
   if (!user) {
-    return NextResponse.json({ error: "Non autorisé" }, { status: 401 });
+    return NextResponse.json({ error: "Not authorized" }, { status: 401 });
   }
 
   const { id } = await params;
   const comment = db.getCommentById(id);
   if (!comment) {
-    return NextResponse.json({ error: "Commentaire introuvable" }, { status: 404 });
+    return NextResponse.json({ error: "Comment not found" }, { status: 404 });
   }
 
   if (comment.authorId !== user.id && user.role !== "admin") {
-    return NextResponse.json({ error: "Action non autorisée" }, { status: 403 });
+    return NextResponse.json({ error: "Action not allowed" }, { status: 403 });
   }
 
   db.deleteComment(id);
@@ -60,7 +62,7 @@ export async function POST(
 ) {
   const user = await getSessionUser();
   if (!user) {
-    return NextResponse.json({ error: "Non autorisé" }, { status: 401 });
+    return NextResponse.json({ error: "Not authorized" }, { status: 401 });
   }
 
   const { id } = await params;
@@ -68,7 +70,7 @@ export async function POST(
   const { emoji } = body;
 
   if (!emoji) {
-    return NextResponse.json({ error: "Emoji manquant" }, { status: 400 });
+    return NextResponse.json({ error: "Missing emoji" }, { status: 400 });
   }
 
   const updated = db.toggleCommentReaction(id, emoji, user.id);

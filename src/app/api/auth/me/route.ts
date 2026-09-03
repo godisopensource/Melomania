@@ -1,3 +1,5 @@
+// src/app/api/auth/me/route.ts — /api/auth/me : session, connexion, déconnexion
+
 import { NextRequest, NextResponse } from "next/server";
 import { getSessionUser, loginUser, registerUser, logoutUser, switchDemoUser } from "@/lib/auth";
 import { db } from "@/lib/db";
@@ -46,5 +48,5 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ user });
   }
 
-  return NextResponse.json({ error: "Action non reconnue" }, { status: 400 });
+  return NextResponse.json({ error: "Unknown action" }, { status: 400 });
 }

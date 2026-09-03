@@ -1,11 +1,15 @@
+// src/app/api/shares/route.ts — /api/shares : création, listing et récupération des partages
+
 import { NextRequest, NextResponse } from "next/server";
 import { getSessionUser } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { YouTubeAdapter } from "@/lib/adapters/youtube";
 import { normalizeMusicText, parseYouTubeUrl } from "@/lib/utils";
-import { MusicResource, MusicSource, MusicShare, ConversationThread } from "@/types";
+import { MusicResource, MusicShare, ConversationThread } from "@/types";
 
 const youtubeAdapter = new YouTubeAdapter();
+
+const rand = () => Math.random().toString(36).slice(2, 8);
 
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url);
@@ -37,7 +41,6 @@ export async function POST(req: NextRequest) {
       url,
       introductoryComment,
       visibility = "public",
-      playlistMode = "single",
       tags = [],
     } = body;
 
@@ -52,19 +55,27 @@ export async function POST(req: NextRequest) {
     const { playlistId, videoId } = parseYouTubeUrl(url);
 
     if (playlistId) {
+      // Single fetch — reused for resources, sources and enrichments.
       const playlist = await youtubeAdapter.getPlaylist(url);
       if (!playlist) {
         return NextResponse.json({ error: "Unable to load playlist from YouTube." }, { status: 404 });
       }
+      if (!playlist.tracks || playlist.tracks.length === 0) {
+        return NextResponse.json(
+          { error: "This playlist appears empty or unavailable (private, deleted, or region-blocked)." },
+          { status: 422 }
+        );
+      }
 
-      let existingSource = db.getMusicSourceByExternalId("youtube", playlist.externalId);
+      const existingSource = db.getMusicSourceByExternalId("youtube", playlist.externalId);
       if (existingSource) {
         resourceId = existingSource.musicResourceId;
       } else {
-        resourceId = `res_pl_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`;
-        
+        resourceId = `res_pl_${Date.now()}_${rand()}`;
+
         const playlistTracks: MusicResource[] = (playlist.tracks || []).map((t, idx) => ({
-          id: `res_trk_${Date.now()}_${idx}`,
+          // Unique id per track (timestamp + index + random suffix — no collisions)
+          id: `res_trk_${Date.now()}_${idx}_${rand()}`,
           type: "track",
           title: t.title,
           artistName: t.artist,
@@ -73,18 +84,36 @@ export async function POST(req: NextRequest) {
           coverImageUrl: t.coverImageUrl || "https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=600",
           normalizedTitle: normalizeMusicText(t.title),
           normalizedArtist: normalizeMusicText(t.artist),
+          // Immutable YouTube Music original order — never reordered locally
+          sourcePosition: idx,
+          playlistId: resourceId,
+          categoryId: null,
+          moodScore: null,
+          softnessScore: null,
+          tags: [],
           createdAt: now,
           updatedAt: now,
         }));
 
         playlistTracks.forEach((trk, idx) => {
           db.createMusicResource(trk);
+          try {
+            db.upsertTrackEnrichment(trk.id, {
+              playlistId: resourceId,
+              categoryId: null,
+              moodScore: null,
+              softnessScore: null,
+              tags: [],
+            });
+          } catch {}
+          // Index comes from the SAME fetch — no out-of-bounds access.
+          const src = playlist.tracks[idx];
           db.createMusicSource({
-            id: `src_trk_${Date.now()}_${idx}`,
+            id: `src_trk_${Date.now()}_${idx}_${rand()}`,
             musicResourceId: trk.id,
             provider: "youtube",
-            externalId: playlist.tracks[idx].externalId,
-            externalUrl: playlist.tracks[idx].externalUrl,
+            externalId: src.externalId,
+            externalUrl: src.externalUrl,
             sourceTitle: trk.title,
             sourceArtist: trk.artistName,
             sourceDurationSeconds: trk.durationSeconds,
@@ -111,7 +140,7 @@ export async function POST(req: NextRequest) {
 
         db.createMusicResource(newPlaylistResource);
         db.createMusicSource({
-          id: `src_${Date.now()}`,
+          id: `src_${Date.now()}_${rand()}`,
           musicResourceId: resourceId,
           provider: "youtube",
           externalId: playlist.externalId,
@@ -129,11 +158,11 @@ export async function POST(req: NextRequest) {
         return NextResponse.json({ error: "Unable to load track from YouTube." }, { status: 404 });
       }
 
-      let existingSource = db.getMusicSourceByExternalId("youtube", track.externalId);
+      const existingSource = db.getMusicSourceByExternalId("youtube", track.externalId);
       if (existingSource) {
         resourceId = existingSource.musicResourceId;
       } else {
-        resourceId = `res_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`;
+        resourceId = `res_${Date.now()}_${rand()}`;
         const newResource: MusicResource = {
           id: resourceId,
           type: "track",
@@ -151,7 +180,7 @@ export async function POST(req: NextRequest) {
 
         db.createMusicResource(newResource);
         db.createMusicSource({
-          id: `src_${Date.now()}`,
+          id: `src_${Date.now()}_${rand()}`,
           musicResourceId: resourceId,
           provider: "youtube",
           externalId: track.externalId,
@@ -169,10 +198,11 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Invalid YouTube URL." }, { status: 400 });
     }
 
-    const shareId = `share_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`;
-    const conversationId = `conv_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`;
+    // One share + one conversation per import (playlist = single coherent block
+    // opened in the PlaylistWorkspace; per-track discussion lives in TrackNoteThreads).
+    const shareId = `share_${Date.now()}_${rand()}`;
+    const conversationId = `conv_${Date.now()}_${rand()}`;
 
-    // Create Conversation Thread
     const thread: ConversationThread = {
       id: conversationId,
       createdById: user.id,
@@ -186,16 +216,14 @@ export async function POST(req: NextRequest) {
     };
     db.createConversationThread(thread);
 
-    // Add author as owner participant
     db.addParticipant({
-      id: `part_${Date.now()}`,
+      id: `part_${Date.now()}_${rand()}`,
       conversationId,
       userId: user.id,
       role: "owner",
       joinedAt: now,
     });
 
-    // Create MusicShare
     const share: MusicShare = {
       id: shareId,
       authorId: user.id,
@@ -210,10 +238,9 @@ export async function POST(req: NextRequest) {
     };
     const createdShare = db.createMusicShare(share);
 
-    // If intro comment provided, insert as initial comment in conversation
     if (introductoryComment?.trim()) {
       db.createComment({
-        id: `comm_${Date.now()}`,
+        id: `comm_${Date.now()}_${rand()}`,
         conversationId,
         authorId: user.id,
         parentCommentId: null,
@@ -227,6 +254,10 @@ export async function POST(req: NextRequest) {
       });
     }
 
+    // Playlists resolve to their workspace; single tracks keep the legacy shape.
+    if (playlistId) {
+      return NextResponse.json({ share: createdShare, playlistId: resourceId });
+    }
     return NextResponse.json({ share: createdShare });
   } catch (err: any) {
     console.error("Create share error:", err);

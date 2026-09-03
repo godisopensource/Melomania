@@ -1,3 +1,5 @@
+// src/types/index.ts — définitions de types partagés
+
 export type MusicResourceType = 'track' | 'playlist' | 'album' | 'artist';
 
 export type MusicProvider = 'youtube' | 'spotify' | 'apple_music' | 'deezer';
@@ -49,8 +51,107 @@ export interface MusicResource {
   genres?: string[];
   trackCount?: number;
   tracks?: MusicResource[]; // For playlists/albums
+  // ——— Melomania curation (non-destructive, optional for legacy data) ———
+  /** Immutable original YouTube Music order. Never reordered locally. */
+  sourcePosition?: number;
+  /** Owning playlist resource id (for tracks imported via playlist). */
+  playlistId?: string;
+  /** Single primary category in this version. */
+  categoryId?: string | null;
+  /** Manually entered 0..100. Null = not rated yet. */
+  moodScore?: number | null;
+  /** Manually entered 0..100. 0 = very soft, 50 = mid, 100 = intense/abrasive. Null = not rated. */
+  softnessScore?: number | null;
+  /** Scores for custom emotional criteria (criterionId -> 0..100 or null). */
+  customScores?: Record<string, number | null>;
+  /** Manually created/selected tags. */
+  tags?: string[];
   createdAt: string;
   updatedAt: string;
+}
+
+export interface PlaylistCategory {
+  id: string;
+  playlistId: string;
+  name: string;
+  description?: string;
+  /** Hex color used for headers, dots, curve segments. */
+  color: string;
+  /** Display order of columns (does NOT affect sourcePosition). */
+  position: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface TrackEnrichment {
+  resourceId: string;
+  playlistId?: string;
+  sourcePosition: number;
+  categoryId?: string | null;
+  moodScore?: number | null;
+  softnessScore?: number | null;
+  customScores?: Record<string, number | null>;
+  tags?: string[];
+  updatedAt: string;
+}
+
+/** Custom emotional criterion (beyond mood & softness), defined per playlist. */
+export interface EmotionalCriterion {
+  id: string;
+  playlistId: string;
+  name: string;
+  minLabel: string;
+  maxLabel: string;
+  color: string;
+  position: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** Immutable editorial root note: once published, never edited/deleted by its author. */
+export interface TrackNote {
+  id: string;
+  trackId: string;
+  playlistId?: string;
+  authorId: string;
+  author?: User;
+  body: string;
+  /** Null = initial editorial note (immutable). Set = reply in the thread. */
+  parentNoteId?: string | null;
+  startTimeSeconds?: number | null;
+  endTimeSeconds?: number | null;
+  attachedResourceId?: string | null;
+  isInitial: boolean;
+  isLocked: boolean;
+  isEdited: boolean;
+  deletedAt?: string | null;
+  mentions?: Mention[];
+  replies?: TrackNote[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type PlaylistViewMode = 'curator' | 'vinyl';
+
+/** Editorial comment slipped between two consecutive tracks (after `afterSourcePosition`). */
+export interface GapComment {
+  id: string;
+  playlistId: string;
+  /** Sits between the track at this sourcePosition and the next one. */
+  afterSourcePosition: number;
+  authorId: string;
+  author?: User;
+  body: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CuratedPlaylist {
+  playlist: MusicResource;
+  categories: PlaylistCategory[];
+  /** All tracks sorted by sourcePosition ascending (immutable order). */
+  tracks: MusicResource[];
+  uncategorized: MusicResource[];
 }
 
 export interface MusicSource {

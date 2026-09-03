@@ -54,7 +54,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       });
       const data = await res.json();
       if (!res.ok) {
-        return { success: false, error: data.error || "Erreur de connexion" };
+        return { success: false, error: data.error || "Sign-in error" };
       }
       setUser(data.user);
       setAuthModalOpen(false);
@@ -79,7 +79,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       });
       const resData = await res.json();
       if (!res.ok) {
-        return { success: false, error: resData.error || "Erreur d'inscription" };
+        return { success: false, error: resData.error || "Sign-up error" };
       }
       setUser(resData.user);
       setAuthModalOpen(false);

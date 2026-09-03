@@ -1,3 +1,5 @@
+// src/app/api/music/search/route.ts — /api/music/search : recherche multi-services musicaux
+
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { normalizeMusicText } from "@/lib/utils";

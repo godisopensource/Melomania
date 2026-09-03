@@ -65,7 +65,7 @@ export class AppleMusicAdapter implements MusicProviderAdapter {
       externalId: playlistId,
       provider: "apple_music",
       title: input.title,
-      description: input.description || "Exporté depuis Melomania",
+      description: input.description || "Exported from Melomania",
       author: "Melomania User",
       coverImageUrl: "https://images.unsplash.com/photo-1514525253161-7a46d19cd819?w=600&auto=format&fit=crop&q=80",
       trackCount: 0,

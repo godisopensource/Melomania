@@ -11,24 +11,29 @@ export function MobileNav() {
   const { user, openAuthModal } = useAuth();
 
   return (
-    <nav className="fixed bottom-0 left-0 right-0 z-40 flex h-16 items-center justify-around border-t border-border bg-background/95 backdrop-blur-md px-2 lg:hidden">
+    <nav
+      className="fixed bottom-0 left-0 right-0 z-40 flex h-16 items-center justify-around border-t border-border bg-background/95 backdrop-blur-md px-2 lg:hidden"
+      aria-label="Navigation principale mobile"
+    >
       <Link
         href="/"
-        className={`flex flex-col items-center gap-1 text-[11px] font-medium ${
+        aria-current={pathname === "/" ? "page" : undefined}
+        className={`melo-focus-ring flex flex-col items-center gap-1 rounded-md px-2 py-1 text-[11px] font-medium ${
           pathname === "/" ? "text-brand-410" : "text-muted-foreground"
         }`}
       >
-        <Flame className="h-4 w-4" />
+        <Flame className="h-4 w-4" aria-hidden="true" />
         <span>Feed</span>
       </Link>
 
       <Link
         href="/playlists"
-        className={`flex flex-col items-center gap-1 text-[11px] font-medium ${
-          pathname === "/playlists" ? "text-brand-410" : "text-muted-foreground"
+        aria-current={pathname?.startsWith("/playlists") ? "page" : undefined}
+        className={`melo-focus-ring flex flex-col items-center gap-1 rounded-md px-2 py-1 text-[11px] font-medium ${
+          pathname?.startsWith("/playlists") ? "text-brand-410" : "text-muted-foreground"
         }`}
       >
-        <ListMusic className="h-4 w-4" />
+        <ListMusic className="h-4 w-4" aria-hidden="true" />
         <span>Playlists</span>
       </Link>
 

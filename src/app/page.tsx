@@ -1,4 +1,5 @@
 "use client";
+// src/app/page.tsx — Racine : page d'accueil (/)
 
 import React, { useState, useEffect } from "react";
 import Link from "next/link";

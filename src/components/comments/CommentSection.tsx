@@ -1,10 +1,12 @@
 "use client";
 
 import React, { useState } from "react";
-import { Comment, User } from "@/types";
+import { Comment, User, MusicResource } from "@/types";
 import { useAuth } from "../providers/AuthProvider";
 import { usePlayer } from "../providers/PlayerProvider";
 import { MentionInput } from "./MentionInput";
+import { renderRichBody } from "./rich-text";
+import { TrackNoteThread } from "../playlist/TrackNoteThread";
 import { formatTime, formatRelativeDate } from "@/lib/utils";
 import {
   Clock,
@@ -25,6 +27,11 @@ interface CommentSectionProps {
   comments: Comment[];
   onCommentAdded?: () => void;
   highlightedTime?: number | null;
+  /**
+   * TrackNoteThread mode: when a track is provided, this section becomes the
+   * track's editorial thread (opening note + replies, mentions, timecodes).
+   */
+  track?: MusicResource;
 }
 
 export function CommentSection({
@@ -32,7 +39,12 @@ export function CommentSection({
   comments,
   onCommentAdded,
   highlightedTime,
+  track,
 }: CommentSectionProps) {
+  // TrackNoteThread system: the opening note starts the thread.
+  if (track) {
+    return <TrackNoteThread track={track} />;
+  }
   const { user, openAuthModal } = useAuth();
   const { currentTime, seekTo, activeCommentTime } = usePlayer();
 
@@ -141,22 +153,8 @@ export function CommentSection({
     }
   };
 
-  const renderCommentBody = (text: string) => {
-    const parts = text.split(/(@[a-zA-Z0-9_-]+)/g);
-    return parts.map((part, i) => {
-      if (part.startsWith("@")) {
-        return (
-          <span
-            key={i}
-            className="inline-flex items-center rounded bg-brand-500/20 px-1.5 py-0.5 text-xs font-semibold text-brand-320"
-          >
-            {part}
-          </span>
-        );
-      }
-      return part;
-    });
-  };
+  // Shared rich text: @ mentions + clickable [m:ss] timecode badges.
+  const renderCommentBody = (text: string) => renderRichBody(text, seekTo);
 
   const renderCommentItem = (item: Comment, isReply = false) => {
     const isTimestamped = item.startTimeSeconds !== null && item.startTimeSeconds !== undefined;

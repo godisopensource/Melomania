@@ -1,3 +1,5 @@
+// src/app/api/export/route.ts — /api/export : export des données utilisateur
+
 import { NextRequest, NextResponse } from "next/server";
 import { getSessionUser } from "@/lib/auth";
 import { db } from "@/lib/db";

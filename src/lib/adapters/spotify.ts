@@ -123,7 +123,7 @@ export class SpotifyAdapter implements MusicProviderAdapter {
       externalId: playlistId,
       provider: "spotify",
       title: input.title,
-      description: input.description || "Exporté depuis Melomania",
+      description: input.description || "Exported from Melomania",
       author: "Melomania User",
       coverImageUrl: "https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=600&auto=format&fit=crop&q=80",
       trackCount: 0,

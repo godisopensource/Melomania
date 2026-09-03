@@ -1,10 +1,11 @@
 "use client";
+// src/app/share/page.tsx — /share : formulaire de création de partage
 
 import React, { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/components/providers/AuthProvider";
 import { MentionInput } from "@/components/comments/MentionInput";
-import { formatTime } from "@/lib/utils";
+import { formatTime, extractYouTubeTags } from "@/lib/utils";
 import {
   Link2,
   Music,
@@ -27,7 +28,6 @@ export default function NewSharePage() {
   const [previewData, setPreviewData] = useState<any>(null);
   const [introComment, setIntroComment] = useState("");
   const [visibility, setVisibility] = useState<"public" | "private">("public");
-  const [playlistMode, setPlaylistMode] = useState<"single" | "individual_tracks">("single");
   const [tagsInput, setTagsInput] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -54,6 +54,7 @@ export default function NewSharePage() {
   useEffect(() => {
     if (!url.trim() || (!url.includes("youtube.com") && !url.includes("youtu.be"))) {
       setPreviewData(null);
+      setTagsInput("");
       return;
     }
 
@@ -73,9 +74,18 @@ export default function NewSharePage() {
         }
 
         setPreviewData(data);
+        // Auto-generate tags from YouTube metadata
+        if (data.type === "track" && data.track) {
+          const tags = extractYouTubeTags(data.track);
+          setTagsInput(tags.join(", "));
+        } else if (data.type === "playlist" && data.playlist) {
+          const tags = extractYouTubeTags(undefined, data.playlist.title);
+          setTagsInput(tags.join(", "));
+        }
       } catch (err: any) {
         setError(err.message);
         setPreviewData(null);
+        setTagsInput("");
       } finally {
         setLoadingPreview(false);
       }
@@ -113,7 +123,6 @@ export default function NewSharePage() {
           url: url.trim(),
           introductoryComment: introComment.trim(),
           visibility,
-          playlistMode,
           tags,
         }),
       });
@@ -123,7 +132,15 @@ export default function NewSharePage() {
         throw new Error(data.error || "Error while creating share.");
       }
 
-      router.push(`/share/${data.share.id}`);
+      // Playlists open in their dedicated workspace (Curator / Vinyl views);
+      // single tracks keep the legacy share page.
+      if (data.playlistId) {
+        router.push(`/playlists/${data.playlistId}`);
+      } else if (data.share?.id) {
+        router.push(`/share/${data.share.id}`);
+      } else {
+        throw new Error("Error while creating share: unexpected response.");
+      }
     } catch (err: any) {
       setError(err.message);
     } finally {
@@ -247,41 +264,10 @@ export default function NewSharePage() {
                   </div>
                 </div>
 
-                <div className="pt-2 border-t border-border space-y-1.5">
-                  <label className="text-xs font-semibold text-muted-foreground">
-                    Playlist display mode:
-                  </label>
-                  <div className="grid grid-cols-2 gap-2">
-                    <button
-                      type="button"
-                      onClick={() => setPlaylistMode("single")}
-                      className={`rounded-lg p-2 text-xs text-left transition-colors ${
-                        playlistMode === "single"
-                          ? "bg-brand-500/20 border border-brand-500/40 text-foreground font-semibold"
-                          : "bg-white/5 hover:bg-white/10 text-muted-foreground"
-                      }`}
-                    >
-                      <span className="block font-bold">Single item</span>
-                      <span className="text-[10px] text-muted-foreground">
-                        Share playlist as a single coherent block
-                      </span>
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setPlaylistMode("individual_tracks")}
-                      className={`rounded-lg p-2 text-xs text-left transition-colors ${
-                        playlistMode === "individual_tracks"
-                          ? "bg-brand-500/20 border border-brand-500/40 text-foreground font-semibold"
-                          : "bg-white/5 hover:bg-white/10 text-muted-foreground"
-                      }`}
-                    >
-                      <span className="block font-bold">Detailed tracks</span>
-                      <span className="text-[10px] text-muted-foreground">
-                        Show tracklist with individual note timestamps
-                      </span>
-                    </button>
-                  </div>
-                </div>
+                <p className="pt-2 border-t border-border text-[11px] text-muted-foreground">
+                  Playlists open as a single block in the playlist workspace (Curator / Vinyl views),
+                  keeping the original YouTube Music order.
+                </p>
               </div>
             )}
           </div>

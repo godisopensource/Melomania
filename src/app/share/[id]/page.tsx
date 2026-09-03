@@ -1,4 +1,5 @@
 "use client";
+// src/app/share/[id]/page.tsx — /share/:id : visualisation d'un partage
 
 import React, { useState, useEffect, use } from "react";
 import Link from "next/link";

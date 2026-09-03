@@ -1,3 +1,5 @@
+// src/app/api/moderation/route.ts — /api/moderation : signalements et actions de modération
+
 import { NextRequest, NextResponse } from "next/server";
 import { getSessionUser } from "@/lib/auth";
 import { db } from "@/lib/db";

@@ -15,6 +15,11 @@ import {
   TrackMatch,
   Notification,
   Report,
+  PlaylistCategory,
+  TrackEnrichment,
+  TrackNote,
+  GapComment,
+  EmotionalCriterion,
 } from "@/types";
 import { encryptToken } from "./encryption";
 
@@ -32,6 +37,11 @@ interface DatabaseSchema {
   trackMatches: TrackMatch[];
   notifications: Notification[];
   reports: Report[];
+  playlistCategories: PlaylistCategory[];
+  trackEnrichments: TrackEnrichment[];
+  trackNotes: TrackNote[];
+  gapComments: GapComment[];
+  emotionalCriteria: EmotionalCriterion[];
 }
 
 const DB_FILE_PATH = path.join(process.cwd(), ".melomania-db.json");
@@ -71,6 +81,11 @@ function getInitialSeed(): DatabaseSchema {
     trackMatches: [],
     notifications: [],
     reports: [],
+    playlistCategories: [],
+    trackEnrichments: [],
+    trackNotes: [],
+    gapComments: [],
+    emotionalCriteria: [],
   };
 }
 
@@ -89,7 +104,8 @@ class MelomaniaDatabase {
         // Ensure admin exists with requested credentials
         const hasAdmin = parsed.users?.some((u: User) => u.username === "admin");
         if (hasAdmin) {
-          return parsed;
+          const migrated = this.migrateNonDestructive(parsed);
+          return migrated;
         }
       }
     } catch (err) {
@@ -98,6 +114,118 @@ class MelomaniaDatabase {
     const initial = getInitialSeed();
     this.saveToDisk(initial);
     return initial;
+  }
+
+  /**
+   * Non-destructive migration:
+   * - ensures new collections exist
+   * - backfills immutable sourcePosition from playlist track order
+   * - never reorders, never deletes existing data
+   */
+  private migrateNonDestructive(parsed: any): DatabaseSchema {
+    const data: DatabaseSchema = {
+      users: parsed.users || [],
+      musicResources: parsed.musicResources || [],
+      musicSources: parsed.musicSources || [],
+      musicShares: parsed.musicShares || [],
+      conversationThreads: parsed.conversationThreads || [],
+      conversationParticipants: parsed.conversationParticipants || [],
+      comments: parsed.comments || [],
+      mentions: parsed.mentions || [],
+      externalConnections: parsed.externalConnections || [],
+      exportJobs: parsed.exportJobs || [],
+      trackMatches: parsed.trackMatches || [],
+      notifications: parsed.notifications || [],
+      reports: parsed.reports || [],
+      playlistCategories: parsed.playlistCategories || [],
+      trackEnrichments: parsed.trackEnrichments || [],
+      trackNotes: parsed.trackNotes || [],
+      gapComments: parsed.gapComments || [],
+      emotionalCriteria: parsed.emotionalCriteria || [],
+    };
+
+    let dirty = false;
+    const enrichmentById = new Map(data.trackEnrichments.map((e) => [e.resourceId, e]));
+
+    // Backfill sourcePosition for every track that belongs to a playlist.
+    // Order reference = index inside playlist.tracks array (YouTube Music original order).
+    for (const res of data.musicResources) {
+      if (res.type === "playlist" && Array.isArray((res as any).tracks)) {
+        const tracks = (res as any).tracks as MusicResource[];
+        tracks.forEach((t, idx) => {
+          // Hydrate embedded copy
+          if (t.sourcePosition === undefined || t.sourcePosition === null) {
+            (t as any).sourcePosition = idx;
+            dirty = true;
+          }
+          if (!(t as any).playlistId) {
+            (t as any).playlistId = res.id;
+            dirty = true;
+          }
+          // Mirror into top-level resource if it exists independently
+          const top = data.musicResources.find((r) => r.id === t.id);
+          if (top) {
+            if (top.sourcePosition === undefined || top.sourcePosition === null) {
+              top.sourcePosition = idx;
+              dirty = true;
+            }
+            if (!top.playlistId) {
+              top.playlistId = res.id;
+              dirty = true;
+            }
+          }
+          // Mirror into enrichment table (immutable once set)
+          if (!enrichmentById.has(t.id)) {
+            const e: TrackEnrichment = {
+              resourceId: t.id,
+              playlistId: res.id,
+              sourcePosition: (t as any).sourcePosition ?? idx,
+              categoryId: (t as any).categoryId ?? null,
+              moodScore: (t as any).moodScore ?? null,
+              softnessScore: (t as any).softnessScore ?? null,
+              tags: (t as any).tags ?? [],
+              updatedAt: new Date().toISOString(),
+            };
+            data.trackEnrichments.push(e);
+            enrichmentById.set(t.id, e);
+            dirty = true;
+          }
+        });
+      }
+      // Standalone tracks without position: keep, do not invent order
+      if (res.type === "track" && (res.sourcePosition === undefined || res.sourcePosition === null)) {
+        const e = enrichmentById.get(res.id);
+        if (e) {
+          res.sourcePosition = e.sourcePosition;
+          res.playlistId = e.playlistId;
+          res.categoryId = e.categoryId;
+          res.moodScore = e.moodScore;
+          res.softnessScore = e.softnessScore;
+          res.tags = e.tags;
+          dirty = true;
+        }
+      }
+    }
+
+    // Apply enrichments onto top-level resources (enrichment wins only when resource lacks value)
+    for (const e of data.trackEnrichments) {
+      const r = data.musicResources.find((x) => x.id === e.resourceId);
+      if (r) {
+        if (r.sourcePosition === undefined) r.sourcePosition = e.sourcePosition;
+        if (r.categoryId === undefined) r.categoryId = e.categoryId ?? null;
+        if (r.moodScore === undefined) r.moodScore = e.moodScore ?? null;
+        if (r.softnessScore === undefined) r.softnessScore = e.softnessScore ?? null;
+        if (r.tags === undefined) r.tags = e.tags ?? [];
+        if (!r.playlistId && e.playlistId) r.playlistId = e.playlistId;
+      }
+    }
+
+    if (dirty) {
+      try {
+        fs.writeFileSync(DB_FILE_PATH, JSON.stringify(data, null, 2), "utf8");
+      } catch {}
+    }
+    return data;
   }
 
   private saveToDisk(data: DatabaseSchema) {
@@ -306,6 +434,15 @@ class MelomaniaDatabase {
     return comment ? this.hydrateComment(comment, []) : undefined;
   }
 
+  /** Most recent non-deleted comments by a user (for public profiles). */
+  getRecentCommentsByUserId(userId: string, limit = 3): Comment[] {
+    return this.data.comments
+      .filter((c) => c.authorId === userId && !c.deletedAt)
+      .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+      .slice(0, Math.max(1, Math.min(20, limit)))
+      .map((c) => this.hydrateComment(c, []));
+  }
+
   createComment(comment: Comment): Comment {
     this.data.comments.push(comment);
     this.updateConversationActivity(comment.conversationId);
@@ -507,6 +644,320 @@ class MelomaniaDatabase {
     };
     this.persist();
     return this.data.reports[idx];
+  }
+
+  // --- PLAYLIST CATEGORIES (manual curation, no auto-classification) ---
+  getPlaylistCategories(playlistId: string): PlaylistCategory[] {
+    return this.data.playlistCategories
+      .filter((c) => c.playlistId === playlistId)
+      .sort((a, b) => a.position - b.position);
+  }
+
+  createPlaylistCategory(cat: PlaylistCategory): PlaylistCategory {
+    this.data.playlistCategories.push(cat);
+    this.persist();
+    return cat;
+  }
+
+  updatePlaylistCategory(id: string, updates: Partial<PlaylistCategory>): PlaylistCategory | null {
+    const idx = this.data.playlistCategories.findIndex((c) => c.id === id);
+    if (idx === -1) return null;
+    this.data.playlistCategories[idx] = {
+      ...this.data.playlistCategories[idx],
+      ...updates,
+      updatedAt: new Date().toISOString(),
+    };
+    this.persist();
+    return this.data.playlistCategories[idx];
+  }
+
+  deletePlaylistCategory(id: string): boolean {
+    const cat = this.data.playlistCategories.find((c) => c.id === id);
+    if (!cat) return false;
+    // Unassign tracks (they become uncategorized, order preserved)
+    for (const r of this.data.musicResources) {
+      if (r.categoryId === id) r.categoryId = null;
+    }
+    for (const pl of this.data.musicResources) {
+      if (pl.type === "playlist" && Array.isArray((pl as any).tracks)) {
+        for (const t of (pl as any).tracks) {
+          if (t.categoryId === id) t.categoryId = null;
+        }
+      }
+    }
+    for (const e of this.data.trackEnrichments) {
+      if (e.categoryId === id) e.categoryId = null;
+    }
+    this.data.playlistCategories = this.data.playlistCategories.filter((c) => c.id !== id);
+    this.persist();
+    return true;
+  }
+
+  // --- EMOTIONAL CRITERIA (custom curves beyond mood & softness) ---
+  getEmotionalCriteria(playlistId: string): EmotionalCriterion[] {
+    return this.data.emotionalCriteria
+      .filter((c) => c.playlistId === playlistId)
+      .sort((a, b) => a.position - b.position);
+  }
+
+  createEmotionalCriterion(criterion: EmotionalCriterion): EmotionalCriterion {
+    this.data.emotionalCriteria.push(criterion);
+    this.persist();
+    return criterion;
+  }
+
+  updateEmotionalCriterion(
+    id: string,
+    updates: Partial<EmotionalCriterion>
+  ): EmotionalCriterion | null {
+    const idx = this.data.emotionalCriteria.findIndex((c) => c.id === id);
+    if (idx === -1) return null;
+    this.data.emotionalCriteria[idx] = {
+      ...this.data.emotionalCriteria[idx],
+      ...updates,
+      updatedAt: new Date().toISOString(),
+    };
+    this.persist();
+    return this.data.emotionalCriteria[idx];
+  }
+
+  deleteEmotionalCriterion(id: string): boolean {
+    const criterion = this.data.emotionalCriteria.find((c) => c.id === id);
+    if (!criterion) return false;
+    // Strip this criterion's scores everywhere.
+    for (const r of this.data.musicResources) {
+      if (r.customScores && id in r.customScores) delete r.customScores[id];
+    }
+    for (const pl of this.data.musicResources) {
+      if (pl.type === "playlist" && Array.isArray((pl as any).tracks)) {
+        for (const t of (pl as any).tracks as MusicResource[]) {
+          if (t.customScores && id in t.customScores) delete t.customScores[id];
+        }
+      }
+    }
+    for (const e of this.data.trackEnrichments) {
+      if (e.customScores && id in e.customScores) delete e.customScores[id];
+    }
+    this.data.emotionalCriteria = this.data.emotionalCriteria.filter((c) => c.id !== id);
+    this.persist();
+    return true;
+  }
+
+  // --- TRACK ENRICHMENT (manual metadata only) ---
+  getTrackEnrichment(resourceId: string): TrackEnrichment | undefined {
+    return this.data.trackEnrichments.find((e) => e.resourceId === resourceId);
+  }
+
+  upsertTrackEnrichment(
+    resourceId: string,
+    updates: Partial<Pick<TrackEnrichment, "categoryId" | "moodScore" | "softnessScore" | "customScores" | "tags" | "playlistId" | "sourcePosition">>
+  ): TrackEnrichment | null {
+    const resource = this.getMusicResourceById(resourceId);
+    // sourcePosition is immutable: refuse any attempt to change it
+    if (updates.sourcePosition !== undefined) {
+      const current = resource?.sourcePosition ?? this.getTrackEnrichment(resourceId)?.sourcePosition;
+      if (current !== undefined && updates.sourcePosition !== current) {
+        throw new Error("Track order follows the original playlist and cannot be changed.");
+      }
+    }
+    // Validate manual scores 0..100
+    for (const key of ["moodScore", "softnessScore"] as const) {
+      const v = (updates as any)[key];
+      if (v !== undefined && v !== null && (typeof v !== "number" || v < 0 || v > 100)) {
+        throw new Error(`${key} must be between 0 and 100.`);
+      }
+    }
+    const sanitizeCustom = (input: Record<string, number | null> | undefined): Record<string, number | null> | undefined => {
+      if (input === undefined) return undefined;
+      if (typeof input !== "object" || input === null || Array.isArray(input)) {
+        throw new Error("customScores must be an object of criterionId to 0..100.");
+      }
+      const out: Record<string, number | null> = {};
+      for (const [k, v] of Object.entries(input)) {
+        if (v === null) {
+          out[k] = null;
+        } else {
+          const n = Number(v);
+          if (!Number.isFinite(n)) throw new Error(`Custom score must be between 0 and 100.`);
+          out[k] = Math.max(0, Math.min(100, Math.round(n)));
+        }
+      }
+      return out;
+    };
+    const customScores = sanitizeCustom(updates.customScores as Record<string, number | null> | undefined);
+    let e = this.data.trackEnrichments.find((x) => x.resourceId === resourceId);
+    if (!e) {
+      e = {
+        resourceId,
+        playlistId: updates.playlistId ?? resource?.playlistId,
+        sourcePosition: resource?.sourcePosition ?? 0,
+        categoryId: updates.categoryId ?? null,
+        moodScore: (updates.moodScore as number | null) ?? null,
+        softnessScore: (updates.softnessScore as number | null) ?? null,
+        customScores: customScores ?? {},
+        tags: updates.tags ?? [],
+        updatedAt: new Date().toISOString(),
+      };
+      this.data.trackEnrichments.push(e);
+    } else {
+      if (updates.categoryId !== undefined) e.categoryId = updates.categoryId;
+      if (updates.moodScore !== undefined) e.moodScore = updates.moodScore;
+      if (updates.softnessScore !== undefined) e.softnessScore = updates.softnessScore;
+      if (customScores !== undefined) e.customScores = { ...(e.customScores ?? {}), ...customScores };
+      if (updates.tags !== undefined) e.tags = updates.tags;
+      if (updates.playlistId !== undefined) e.playlistId = updates.playlistId;
+      e.updatedAt = new Date().toISOString();
+    }
+    // Mirror onto resource copies (top-level + embedded) — never touch sourcePosition
+    const mirror = (r: MusicResource) => {
+      if (updates.categoryId !== undefined) r.categoryId = updates.categoryId;
+      if (updates.moodScore !== undefined) r.moodScore = updates.moodScore;
+      if (updates.softnessScore !== undefined) r.softnessScore = updates.softnessScore;
+      if (customScores !== undefined) r.customScores = { ...(r.customScores ?? {}), ...customScores };
+      if (updates.tags !== undefined) r.tags = [...updates.tags];
+      r.updatedAt = new Date().toISOString();
+    };
+    if (resource) mirror(resource);
+    for (const pl of this.data.musicResources) {
+      if (pl.type === "playlist" && Array.isArray((pl as any).tracks)) {
+        const t = ((pl as any).tracks as MusicResource[]).find((x) => x.id === resourceId);
+        if (t) mirror(t);
+      }
+    }
+    this.persist();
+    return e;
+  }
+
+  /** Playlist + tracks enriched, tracks ALWAYS sorted by sourcePosition. */
+  getCuratedPlaylist(playlistId: string): { playlist: MusicResource; categories: PlaylistCategory[]; tracks: MusicResource[] } | null {
+    const playlist = this.getMusicResourceById(playlistId);
+    if (!playlist || playlist.type !== "playlist") return null;
+    const categories = this.getPlaylistCategories(playlistId);
+    let tracks: MusicResource[] = [];
+    if (Array.isArray(playlist.tracks) && playlist.tracks.length > 0) {
+      tracks = [...playlist.tracks];
+    } else {
+      tracks = this.data.musicResources.filter((r) => r.type === "track" && r.playlistId === playlistId);
+      // Fallback: standalone tracks carry enrichment
+      tracks = tracks.map((t) => {
+        const e = this.getTrackEnrichment(t.id);
+        return e
+          ? { ...t, sourcePosition: e.sourcePosition, categoryId: e.categoryId, moodScore: e.moodScore, softnessScore: e.softnessScore, customScores: { ...(e.customScores ?? {}), ...(t.customScores ?? {}) }, tags: e.tags }
+          : t;
+      });
+    }
+    // Enrich embedded copies from enrichment table
+    tracks = tracks.map((t) => {
+      const e = this.getTrackEnrichment(t.id);
+      if (e) {
+        return {
+          ...t,
+          sourcePosition: t.sourcePosition ?? e.sourcePosition,
+          playlistId: t.playlistId ?? e.playlistId,
+          categoryId: t.categoryId ?? e.categoryId ?? null,
+          moodScore: t.moodScore ?? e.moodScore ?? null,
+          softnessScore: t.softnessScore ?? e.softnessScore ?? null,
+          customScores: { ...(e.customScores ?? {}), ...(t.customScores ?? {}) },
+          tags: t.tags ?? e.tags ?? [],
+        };
+      }
+      return { ...t, customScores: t.customScores ?? {}, tags: t.tags ?? [] };
+    });
+    tracks.sort((a, b) => (a.sourcePosition ?? 0) - (b.sourcePosition ?? 0));
+    return { playlist, categories, tracks };
+  }
+
+  // --- TRACK NOTES (immutable initial editorial note + replies) ---
+  getTrackNotes(trackId: string): TrackNote[] {
+    const all = this.data.trackNotes.filter((n) => n.trackId === trackId && !n.deletedAt);
+    const roots = all.filter((n) => !n.parentNoteId);
+    const replies = all.filter((n) => !!n.parentNoteId);
+    return roots
+      .map((r) => this.hydrateTrackNote(r, replies))
+      .sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+  }
+
+  getTrackInitialNote(trackId: string): TrackNote | undefined {
+    const roots = this.data.trackNotes.filter((n) => n.trackId === trackId && !n.parentNoteId && !n.deletedAt);
+    if (roots.length === 0) return undefined;
+    const sorted = [...roots].sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+    return this.hydrateTrackNote(sorted[0], this.data.trackNotes);
+  }
+
+  createTrackNote(note: TrackNote): TrackNote {
+    // Only ONE initial note per track: further top-level attempts become replies is handled by API
+    this.data.trackNotes.push(note);
+    this.persist();
+    return this.hydrateTrackNote(note, []);
+  }
+
+  updateTrackNote(id: string, updates: Partial<TrackNote>, requesterId: string): TrackNote | null {
+    const idx = this.data.trackNotes.findIndex((n) => n.id === id);
+    if (idx === -1) return null;
+    const existing = this.data.trackNotes[idx];
+    // Initial note: set in stone once published — no edits by anyone (author included)
+    if (existing.isInitial && existing.isLocked) {
+      throw new Error("The opening editorial note cannot be edited or deleted.");
+    }
+    this.data.trackNotes[idx] = {
+      ...existing,
+      ...updates,
+      id: existing.id,
+      trackId: existing.trackId,
+      isInitial: existing.isInitial,
+      isLocked: existing.isLocked,
+      isEdited: true,
+      updatedAt: new Date().toISOString(),
+    };
+    this.persist();
+    return this.hydrateTrackNote(this.data.trackNotes[idx], []);
+  }
+
+  deleteTrackNote(id: string): boolean {
+    const note = this.data.trackNotes.find((n) => n.id === id);
+    if (!note) return false;
+    if (note.isInitial && note.isLocked) {
+      throw new Error("The opening editorial note cannot be edited or deleted.");
+    }
+    note.deletedAt = new Date().toISOString();
+    this.persist();
+    return true;
+  }
+
+  private hydrateTrackNote(note: TrackNote, allReplies: TrackNote[]): TrackNote {
+    const replies = allReplies
+      .filter((r) => r.parentNoteId === note.id && !r.deletedAt)
+      .map((r) => this.hydrateTrackNote(r, []))
+      .sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+    const mentions = this.data.mentions.filter((m) => m.commentId === note.id);
+    return { ...note, author: this.getUserById(note.authorId), mentions, replies: replies.length > 0 ? replies : undefined };
+  }
+
+  // --- GAP COMMENTS (between two consecutive tracks) ---
+  getGapComments(playlistId: string): GapComment[] {
+    return this.data.gapComments
+      .filter((g) => g.playlistId === playlistId)
+      .map((g) => ({ ...g, author: this.getUserById(g.authorId) }))
+      .sort((a, b) => a.afterSourcePosition - b.afterSourcePosition);
+  }
+
+  createGapComment(gap: GapComment): GapComment {
+    this.data.gapComments.push(gap);
+    this.persist();
+    return { ...gap, author: this.getUserById(gap.authorId) };
+  }
+
+  deleteGapComment(id: string): boolean {
+    const initialLen = this.data.gapComments.length;
+    this.data.gapComments = this.data.gapComments.filter((g) => g.id !== id);
+    this.persist();
+    return this.data.gapComments.length !== initialLen;
+  }
+
+  /** Share that published a playlist resource (for ownership checks). */
+  getShareByResourceId(resourceId: string): MusicShare | undefined {
+    const share = this.data.musicShares.find((s) => s.resourceId === resourceId);
+    return share ? this.hydrateShare(share) : undefined;
   }
 }
 

@@ -4,6 +4,7 @@ import React, { useState, useEffect } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useAuth } from "../providers/AuthProvider";
+import { usePlayer } from "../providers/PlayerProvider";
 import {
   Search,
   Bell,
@@ -12,8 +13,6 @@ import {
   LogOut,
   Settings,
   ShieldAlert,
-  Sun,
-  Moon,
   Share2,
 } from "lucide-react";
 import { Notification } from "@/types";
@@ -21,6 +20,7 @@ import { Notification } from "@/types";
 export function Navbar() {
   const router = useRouter();
   const { user, logout, openAuthModal } = useAuth();
+  const { reset: resetPlayer } = usePlayer();
 
   const [searchQuery, setSearchQuery] = useState("");
   const [searchResults, setSearchResults] = useState<{ users: any[]; tracks: any[]; playlists: any[] } | null>(null);
@@ -31,7 +31,6 @@ export function Navbar() {
   const [notifOpen, setNotifOpen] = useState(false);
 
   const [userMenuOpen, setUserMenuOpen] = useState(false);
-  const [isDarkMode, setIsDarkMode] = useState(true);
 
   useEffect(() => {
     if (!user) return;
@@ -65,13 +64,6 @@ export function Navbar() {
     }, 250);
     return () => clearTimeout(timer);
   }, [searchQuery]);
-
-  const toggleTheme = () => {
-    setIsDarkMode(!isDarkMode);
-    if (typeof document !== "undefined") {
-      document.documentElement.classList.toggle("light");
-    }
-  };
 
   const handleMarkAllRead = async () => {
     try {
@@ -185,14 +177,6 @@ export function Navbar() {
             <span className="hidden sm:inline">New share</span>
           </Link>
 
-          <button
-            onClick={toggleTheme}
-            className="rounded-lg border border-border bg-white/5 p-2 text-muted-foreground hover:bg-white/10 hover:text-foreground transition-colors"
-            title="Toggle theme"
-          >
-            {isDarkMode ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
-          </button>
-
           {user && (
             <div className="relative">
               <button
@@ -302,7 +286,9 @@ export function Navbar() {
                   <button
                     onClick={() => {
                       logout();
+                      resetPlayer();
                       setUserMenuOpen(false);
+                      router.push("/");
                     }}
                     className="flex w-full items-center gap-2 rounded-lg p-2 text-xs text-destructive hover:bg-destructive/10"
                   >
