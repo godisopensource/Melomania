@@ -9,15 +9,15 @@ export async function GET(
   { params }: { params: Promise<{ id: string }> }
 ) {
   const { id } = await params;
-  const curated = db.getCuratedPlaylist(id);
+  const curated = await db.getCuratedPlaylist(id);
   if (!curated) {
     return NextResponse.json({ error: "Playlist not found." }, { status: 404 });
   }
   // Same visibility rule as shares: a private share's playlist stays private.
-  const share = db.getShareByResourceId(id);
+  const share = await db.getShareByResourceId(id);
   if (share) {
     const viewer = await getSessionUser();
-    if (!db.isShareVisibleTo(share, viewer?.id)) {
+    if (!await db.isShareVisibleTo(share, viewer?.id)) {
       return NextResponse.json({ error: "This playlist is private." }, { status: 403 });
     }
   }
@@ -26,10 +26,10 @@ export async function GET(
   return NextResponse.json({
     playlist: curated.playlist,
     categories: curated.categories,
-    criteria: db.getEmotionalCriteria(id),
+    criteria: await db.getEmotionalCriteria(id),
     tracks: curated.tracks,
     uncategorized,
-    gapComments: db.getGapComments(id),
+    gapComments: await db.getGapComments(id),
     ownerId: ownerId ?? null,
     isOwner,
   });

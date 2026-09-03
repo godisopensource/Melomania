@@ -10,7 +10,7 @@ export async function GET() {
     return NextResponse.json({ notifications: [] });
   }
 
-  const notifications = db.getNotificationsByUserId(user.id);
+  const notifications = await db.getNotificationsByUserId(user.id);
   const unreadCount = notifications.filter((n) => !n.isRead).length;
 
   return NextResponse.json({ notifications, unreadCount });
@@ -26,12 +26,12 @@ export async function PATCH(req: NextRequest) {
   const { id, markAll } = body;
 
   if (markAll) {
-    const updatedCount = db.markAllNotificationsAsRead(user.id);
+    const updatedCount = await db.markAllNotificationsAsRead(user.id);
     return NextResponse.json({ success: true, count: updatedCount });
   }
 
   if (id) {
-    const ok = db.markNotificationAsRead(id, user.id);
+    const ok = await db.markNotificationAsRead(id, user.id);
     return NextResponse.json({ success: ok });
   }
 

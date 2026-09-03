@@ -12,7 +12,7 @@ export async function GET() {
     return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
   }
 
-  const connections = db.getConnectionsByUserId(user.id);
+  const connections = await db.getConnectionsByUserId(user.id);
   const safeConnections = connections.map(({ accessTokenEncrypted, refreshTokenEncrypted, ...rest }) => ({
     ...rest,
     isConnected: true,
@@ -35,7 +35,7 @@ export async function POST(req: NextRequest) {
   }
 
   if (action === "disconnect") {
-    db.deleteConnection(user.id, provider);
+    await db.deleteConnection(user.id, provider);
     return NextResponse.json({ success: true, isConnected: false });
   }
 
@@ -55,7 +55,7 @@ export async function POST(req: NextRequest) {
       updatedAt: now,
     };
 
-    db.saveConnection(newConnection);
+    await db.saveConnection(newConnection);
     return NextResponse.json({
       success: true,
       isConnected: true,

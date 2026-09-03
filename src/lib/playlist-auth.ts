@@ -14,7 +14,7 @@ export interface OwnerCheck {
 export async function requirePlaylistOwner(playlistId: string): Promise<OwnerCheck> {
   const user = await getSessionUser();
   if (!user) return { error: "You must be signed in.", status: 401 };
-  const share = db.getShareByResourceId(playlistId);
+  const share = await db.getShareByResourceId(playlistId);
   const ownerId = share?.authorId;
   if (share && share.authorId !== user.id && user.role !== "admin") {
     return { user, ownerId, error: "Only the playlist creator can edit this.", status: 403 };
@@ -26,7 +26,7 @@ export async function describePlaylistAccess(
   playlistId: string
 ): Promise<{ ownerId?: string; isOwner: boolean }> {
   const user = await getSessionUser();
-  const share = db.getShareByResourceId(playlistId);
+  const share = await db.getShareByResourceId(playlistId);
   const ownerId = share?.authorId;
   const isOwner = !!user && (!share || share.authorId === user.id || user.role === "admin");
   return { ownerId, isOwner };

@@ -44,3 +44,4 @@ next-env.d.ts
 *.ai
 XCicero_Bonbance.zip
 dev-instructions.md
+.neon

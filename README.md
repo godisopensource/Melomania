@@ -83,11 +83,25 @@ Pour faciliter vos tests et la navigation, plusieurs profils avec historique et 
 
 ## 🌐 Déploiement
 
-### Déploiement sur Vercel
-1. Poussez le dépôt sur GitHub / GitLab.
-2. Importez le projet sur [Vercel](https://vercel.com).
-3. Framework Preset : **Next.js**.
-4. Déployez ! (Fonctionne immédiatement sans configuration supplémentaire grâce à la persistance intégrée).
+> ⚠️ **Persistance (important)** : sans base externe, les données (comptes,
+> shares, commentaires, likes) vivent dans `.melomania-db.json`, un fichier
+> **gitignoré sur un filesystem éphémère** : chaque déploiement Vercel repart
+> d'une base vide. La prod **doit** définir `DATABASE_URL` (Neon Postgres) —
+> voir ci-dessous. En dev local sans `DATABASE_URL`, le fichier JSON continue
+> de fonctionner comme avant.
+
+### Base durable sur Vercel + Neon (prod)
+1. Crée un projet sur [Neon](https://neon.tech) et copie la **pooled connection string**.
+2. Sur [Vercel](https://vercel.com) → Settings → Environment Variables, ajoute
+   `DATABASE_URL` (Production + Preview), ainsi que `SESSION_SECRET`,
+   `ADMIN_INITIAL_PASSWORD_HASH` et `TURNSTILE_SECRET`.
+3. Poussez le dépôt et déployez (Framework Preset : **Next.js**).
+4. (Optionnel, pour restaurer une copie locale) :
+   ```bash
+   DATABASE_URL="postgresql://..." npm run db:push
+   ```
+
+### Déploiement sur Netlify
 
 ### Déploiement sur Netlify
 1. Connectez le dépôt sur [Netlify](https://netlify.com).

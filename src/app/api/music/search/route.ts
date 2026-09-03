@@ -11,18 +11,20 @@ export async function GET(req: NextRequest) {
   const type = searchParams.get("type"); // 'all', 'user', 'track', 'artist', 'playlist'
 
   if (!q.trim()) {
+    const allUsersEmpty = await db.getUsers();
+    const allResourcesEmpty = await db.getMusicResources();
     return NextResponse.json({
-      users: db.getUsers().slice(0, 5).map(toPublicUser),
-      tracks: db.getMusicResources().filter((r) => r.type === "track").slice(0, 5),
-      playlists: db.getMusicResources().filter((r) => r.type === "playlist").slice(0, 5),
+      users: allUsersEmpty.slice(0, 5).map(toPublicUser),
+      tracks: allResourcesEmpty.filter((r) => r.type === "track").slice(0, 5),
+      playlists: allResourcesEmpty.filter((r) => r.type === "playlist").slice(0, 5),
     });
   }
 
   const queryClean = normalizeMusicText(q);
 
   // Match users
-  const users = db
-    .getUsers()
+  const allUsers = await db.getUsers();
+  const users = allUsers
     .filter(
       (u) =>
         u.username.toLowerCase().includes(queryClean) ||
@@ -34,7 +36,7 @@ export async function GET(req: NextRequest) {
   void type;
 
   // Match music resources
-  const allResources = db.getMusicResources();
+  const allResources = await db.getMusicResources();
   const tracks = allResources
     .filter(
       (r) =>

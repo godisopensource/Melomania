@@ -14,21 +14,21 @@ export async function POST(
     return NextResponse.json({ error: "You must be signed in." }, { status: 401 });
   }
   const { id } = await params;
-  const existing = db.getMusicShareById(id);
+  const existing = await db.getMusicShareById(id);
   if (!existing) {
     return NextResponse.json({ error: "Share not found." }, { status: 404 });
   }
-  if (!db.isShareVisibleTo(existing, user.id)) {
+  if (!await db.isShareVisibleTo(existing, user.id)) {
     return NextResponse.json({ error: "This share is private." }, { status: 403 });
   }
-  const result = db.toggleShareLike(id, user.id);
+  const result = await db.toggleShareLike(id, user.id);
   if (!result) {
     return NextResponse.json({ error: "Share not found." }, { status: 404 });
   }
   // Notify the author when someone else likes their share (only on like, not unlike).
   if (result.liked && existing.authorId !== user.id) {
     const now = new Date().toISOString();
-    db.createNotification({
+    await db.createNotification({
       id: `notif_${Date.now()}_${rand()}`,
       recipientId: existing.authorId,
       actorId: user.id,

@@ -22,7 +22,7 @@ export async function POST(req: NextRequest) {
       playlistTitle,
     } = body;
 
-    const resource = db.getMusicResourceById(resourceId);
+    const resource = await db.getMusicResourceById(resourceId);
     if (!resource) {
       return NextResponse.json({ error: "Music resource not found." }, { status: 404 });
     }
@@ -63,7 +63,7 @@ export async function POST(req: NextRequest) {
     }
 
     if (action === "execute_export") {
-      const connection = db.getConnection(user.id, targetProvider);
+      const connection = await db.getConnection(user.id, targetProvider);
       if (!connection) {
         return NextResponse.json(
           {
@@ -110,9 +110,9 @@ export async function POST(req: NextRequest) {
         completedAt: new Date().toISOString(),
       };
 
-      db.createExportJob(job);
+      await db.createExportJob(job);
 
-      db.createNotification({
+      await db.createNotification({
         id: `notif_${Date.now()}`,
         recipientId: user.id,
         actorId: user.id,

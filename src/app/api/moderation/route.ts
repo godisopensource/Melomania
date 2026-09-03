@@ -11,7 +11,7 @@ export async function GET() {
     return NextResponse.json({ error: "Access restricted to administrators" }, { status: 403 });
   }
 
-  const reports = db.getReports();
+  const reports = await db.getReports();
   return NextResponse.json({ reports });
 }
 
@@ -39,7 +39,7 @@ export async function POST(req: NextRequest) {
     updatedAt: new Date().toISOString(),
   };
 
-  db.createReport(report);
+  await db.createReport(report);
   return NextResponse.json({ success: true, report });
 }
 
@@ -52,6 +52,6 @@ export async function PATCH(req: NextRequest) {
   const body = await req.json();
   const { id, status, adminNotes } = body;
 
-  const updated = db.updateReport(id, { status, adminNotes });
+  const updated = await db.updateReport(id, { status, adminNotes });
   return NextResponse.json({ report: updated });
 }

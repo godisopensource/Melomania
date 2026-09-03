@@ -16,7 +16,7 @@ export async function PATCH(
     if (!body.body || !String(body.body).trim()) {
       return NextResponse.json({ error: "Note body is required." }, { status: 400 });
     }
-    const updated = db.updateTrackNote(noteId, { body: String(body.body).trim().slice(0, 5000) }, user.id);
+    const updated = await db.updateTrackNote(noteId, { body: String(body.body).trim().slice(0, 5000) }, user.id);
     if (!updated) return NextResponse.json({ error: "Note not found." }, { status: 404 });
     return NextResponse.json({ note: updated });
   } catch (e: any) {
@@ -34,7 +34,7 @@ export async function DELETE(
   if (!user) return NextResponse.json({ error: "You must be signed in." }, { status: 401 });
   const { noteId } = await params;
   try {
-    const ok = db.deleteTrackNote(noteId);
+    const ok = await db.deleteTrackNote(noteId);
     if (!ok) return NextResponse.json({ error: "Note not found." }, { status: 404 });
     return NextResponse.json({ ok: true });
   } catch (e: any) {

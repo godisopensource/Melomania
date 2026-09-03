@@ -14,7 +14,7 @@ export async function PATCH(
   }
 
   const { id } = await params;
-  const comment = db.getCommentById(id);
+  const comment = await db.getCommentById(id);
   if (!comment) {
     return NextResponse.json({ error: "Comment not found" }, { status: 404 });
   }
@@ -24,7 +24,7 @@ export async function PATCH(
   }
 
   const body = await req.json();
-  const updated = db.updateComment(id, {
+  const updated = await db.updateComment(id, {
     body: body.body,
     startTimeSeconds: body.startTimeSeconds !== undefined ? body.startTimeSeconds : comment.startTimeSeconds,
     endTimeSeconds: body.endTimeSeconds !== undefined ? body.endTimeSeconds : comment.endTimeSeconds,
@@ -43,7 +43,7 @@ export async function DELETE(
   }
 
   const { id } = await params;
-  const comment = db.getCommentById(id);
+  const comment = await db.getCommentById(id);
   if (!comment) {
     return NextResponse.json({ error: "Comment not found" }, { status: 404 });
   }
@@ -52,7 +52,7 @@ export async function DELETE(
     return NextResponse.json({ error: "Action not allowed" }, { status: 403 });
   }
 
-  db.deleteComment(id);
+  await db.deleteComment(id);
   return NextResponse.json({ success: true });
 }
 
@@ -73,6 +73,6 @@ export async function POST(
     return NextResponse.json({ error: "Missing emoji" }, { status: 400 });
   }
 
-  const updated = db.toggleCommentReaction(id, emoji, user.id);
+  const updated = await db.toggleCommentReaction(id, emoji, user.id);
   return NextResponse.json({ comment: updated });
 }

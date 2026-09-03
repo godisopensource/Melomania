@@ -21,7 +21,7 @@ export async function PATCH(
     if (body.position !== undefined && Number.isFinite(Number(body.position))) {
       allowed.position = Number(body.position);
     }
-    const updated = db.updatePlaylistCategory(catId, allowed);
+    const updated = await db.updatePlaylistCategory(catId, allowed);
     if (!updated) return NextResponse.json({ error: "Category not found." }, { status: 404 });
     return NextResponse.json({ category: updated });
   } catch {
@@ -38,7 +38,7 @@ export async function DELETE(
   if (check.error || !check.user) {
     return NextResponse.json({ error: check.error || "You must be signed in." }, { status: check.status || 401 });
   }
-  const ok = db.deletePlaylistCategory(catId);
+  const ok = await db.deletePlaylistCategory(catId);
   if (!ok) return NextResponse.json({ error: "Category not found." }, { status: 404 });
   return NextResponse.json({ ok: true });
 }

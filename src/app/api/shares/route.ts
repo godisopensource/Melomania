@@ -19,7 +19,7 @@ export async function GET(req: NextRequest) {
   const viewer = await getSessionUser();
   const viewerId = viewer?.id;
 
-  let shares = db.getMusicShares(viewerId);
+  let shares = await db.getMusicShares(viewerId);
 
   if (authorId) {
     shares = shares.filter((s) => s.authorId === authorId);
@@ -31,7 +31,11 @@ export async function GET(req: NextRequest) {
 
   // Private shares are only visible to their author, invited users and participants.
   // Public stays the default feed.
-  shares = shares.filter((s) => db.isShareVisibleTo(s, viewerId));
+  const visibleShares = [];
+  for (const s of shares) {
+    if (await db.isShareVisibleTo(s, viewerId)) visibleShares.push(s);
+  }
+  shares = visibleShares;
 
   return NextResponse.json({ shares });
 }
@@ -78,7 +82,7 @@ export async function POST(req: NextRequest) {
         const clean = name.replace(/^@/, "").slice(0, 30);
         if (!clean || seen.has(clean.toLowerCase())) continue;
         seen.add(clean.toLowerCase());
-        const found = db.getUserByUsername(clean);
+        const found = await db.getUserByUsername(clean);
         if (!found) {
           unknownUsernames.push(clean);
         } else if (found.id !== user.id) {
@@ -112,7 +116,7 @@ export async function POST(req: NextRequest) {
         );
       }
 
-      const existingSource = db.getMusicSourceByExternalId("youtube", playlist.externalId);
+      const existingSource = await db.getMusicSourceByExternalId("youtube", playlist.externalId);
       if (existingSource) {
         resourceId = existingSource.musicResourceId;
       } else {
@@ -140,10 +144,10 @@ export async function POST(req: NextRequest) {
           updatedAt: now,
         }));
 
-        playlistTracks.forEach((trk, idx) => {
-          db.createMusicResource(trk);
+        for (const [idx, trk] of playlistTracks.entries()) {
+          await db.createMusicResource(trk);
           try {
-            db.upsertTrackEnrichment(trk.id, {
+            await db.upsertTrackEnrichment(trk.id, {
               playlistId: resourceId,
               categoryId: null,
               moodScore: null,
@@ -153,7 +157,7 @@ export async function POST(req: NextRequest) {
           } catch {}
           // Index comes from the SAME fetch — no out-of-bounds access.
           const src = playlist.tracks[idx];
-          db.createMusicSource({
+          await db.createMusicSource({
             id: `src_trk_${Date.now()}_${idx}_${rand()}`,
             musicResourceId: trk.id,
             provider: "youtube",
@@ -165,7 +169,7 @@ export async function POST(req: NextRequest) {
             createdAt: now,
             updatedAt: now,
           });
-        });
+        }
 
         const newPlaylistResource: MusicResource = {
           id: resourceId,
@@ -183,8 +187,8 @@ export async function POST(req: NextRequest) {
           updatedAt: now,
         };
 
-        db.createMusicResource(newPlaylistResource);
-        db.createMusicSource({
+        await db.createMusicResource(newPlaylistResource);
+        await db.createMusicSource({
           id: `src_${Date.now()}_${rand()}`,
           musicResourceId: resourceId,
           provider: "youtube",
@@ -203,7 +207,7 @@ export async function POST(req: NextRequest) {
         return NextResponse.json({ error: "Unable to load track from YouTube." }, { status: 404 });
       }
 
-      const existingSource = db.getMusicSourceByExternalId("youtube", track.externalId);
+      const existingSource = await db.getMusicSourceByExternalId("youtube", track.externalId);
       if (existingSource) {
         resourceId = existingSource.musicResourceId;
       } else {
@@ -223,8 +227,8 @@ export async function POST(req: NextRequest) {
           updatedAt: now,
         };
 
-        db.createMusicResource(newResource);
-        db.createMusicSource({
+        await db.createMusicResource(newResource);
+        await db.createMusicSource({
           id: `src_${Date.now()}_${rand()}`,
           musicResourceId: resourceId,
           provider: "youtube",
@@ -259,9 +263,9 @@ export async function POST(req: NextRequest) {
       createdAt: now,
       updatedAt: now,
     };
-    db.createConversationThread(thread);
+    await db.createConversationThread(thread);
 
-    db.addParticipant({
+    await db.addParticipant({
       id: `part_${Date.now()}_${rand()}`,
       conversationId,
       userId: user.id,
@@ -283,18 +287,18 @@ export async function POST(req: NextRequest) {
       createdAt: now,
       updatedAt: now,
     };
-    const createdShare = db.createMusicShare(share);
+    const createdShare = await db.createMusicShare(share);
 
     // Invite the explicitly shared-with users: participant + notification.
     for (const invited of invitedUsers) {
-      db.addParticipant({
+      await db.addParticipant({
         id: `part_${Date.now()}_${rand()}`,
         conversationId,
         userId: invited.id,
         role: "member",
         joinedAt: now,
       });
-      db.createNotification({
+      await db.createNotification({
         id: `notif_${Date.now()}_${rand()}`,
         recipientId: invited.id,
         actorId: user.id,
@@ -309,7 +313,7 @@ export async function POST(req: NextRequest) {
     }
 
     if (introductoryComment?.trim()) {
-      db.createComment({
+      await db.createComment({
         id: `comm_${Date.now()}_${rand()}`,
         conversationId,
         authorId: user.id,

@@ -9,7 +9,7 @@ export async function GET(
   { params }: { params: Promise<{ username: string }> }
 ) {
   const { username } = await params;
-  const found = db.getUserByUsername(decodeURIComponent(username).slice(0, 30));
+  const found = await db.getUserByUsername(decodeURIComponent(username).slice(0, 30));
   if (!found) {
     return NextResponse.json({ error: "User not found." }, { status: 404 });
   }
@@ -22,25 +22,31 @@ export async function GET(
 
   // Email visible uniquement par soi-même, jamais de hash.
   const user = isSelf ? toSafeUser(found) : toPublicUser(found);
-  const allShares = db.getMusicSharesByAuthorId(found.id, session?.id);
-  const shares = allShares.filter((s) => db.isShareVisibleTo(s, session?.id));
-  const recentComments = db.getRecentCommentsByUserId(found.id, 3).map((c) => {
-    const thread = db.getConversationThreadById(c.conversationId);
-    const share = thread?.shareId ? db.getMusicShareById(thread.shareId) : undefined;
-    const resource = share?.resource;
-    return {
-      ...c,
-      context: thread
-        ? {
-            threadTitle: thread.title,
-            shareId: thread.shareId ?? share?.id ?? null,
-            resourceId: resource?.id ?? null,
-            resourceTitle: resource?.title ?? null,
-            resourceType: resource?.type ?? null,
-          }
-        : null,
-    };
-  });
+  const allShares = await db.getMusicSharesByAuthorId(found.id, session?.id);
+  const shares = [];
+  for (const s of allShares) {
+    if (await db.isShareVisibleTo(s, session?.id)) shares.push(s);
+  }
+  const latestComments = await db.getRecentCommentsByUserId(found.id, 3);
+  const recentComments = await Promise.all(
+    latestComments.map(async (c) => {
+      const thread = await db.getConversationThreadById(c.conversationId);
+      const share = thread?.shareId ? await db.getMusicShareById(thread.shareId) : undefined;
+      const resource = share?.resource;
+      return {
+        ...c,
+        context: thread
+          ? {
+              threadTitle: thread.title,
+              shareId: thread.shareId ?? share?.id ?? null,
+              resourceId: resource?.id ?? null,
+              resourceTitle: resource?.title ?? null,
+              resourceType: resource?.type ?? null,
+            }
+          : null,
+      };
+    })
+  );
 
   return NextResponse.json({ user, shares, recentComments, isSelf });
 }
@@ -54,7 +60,7 @@ export async function PATCH(
     return NextResponse.json({ error: "You must be signed in." }, { status: 401 });
   }
   const { username } = await params;
-  const found = db.getUserByUsername(decodeURIComponent(username).slice(0, 30));
+  const found = await db.getUserByUsername(decodeURIComponent(username).slice(0, 30));
   if (!found) {
     return NextResponse.json({ error: "User not found." }, { status: 404 });
   }
@@ -84,7 +90,7 @@ export async function PATCH(
     if (typeof body.isPublic === "boolean") {
       updates.isPublic = body.isPublic;
     }
-    const updated = db.updateUser(found.id, updates);
+    const updated = await db.updateUser(found.id, updates);
     if (!updated) return NextResponse.json({ error: "User not found." }, { status: 404 });
     const isSelf = session.id === found.id;
     const user = isSelf ? toSafeUser(updated) : toPublicUser(updated);

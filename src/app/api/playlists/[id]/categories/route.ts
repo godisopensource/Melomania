@@ -10,7 +10,7 @@ export async function GET(
   { params }: { params: Promise<{ id: string }> }
 ) {
   const { id } = await params;
-  return NextResponse.json({ categories: db.getPlaylistCategories(id) });
+  return NextResponse.json({ categories: await db.getPlaylistCategories(id) });
 }
 
 export async function POST(
@@ -22,7 +22,7 @@ export async function POST(
   if (check.error || !check.user) {
     return NextResponse.json({ error: check.error || "You must be signed in." }, { status: check.status || 401 });
   }
-  const curated = db.getCuratedPlaylist(playlistId);
+  const curated = await db.getCuratedPlaylist(playlistId);
   if (!curated) return NextResponse.json({ error: "Playlist not found." }, { status: 404 });
 
   try {
@@ -31,9 +31,9 @@ export async function POST(
     if (!name || !String(name).trim()) {
       return NextResponse.json({ error: "Category name is required." }, { status: 400 });
     }
-    const existing = db.getPlaylistCategories(playlistId);
+    const existing = await db.getPlaylistCategories(playlistId);
     const now = new Date().toISOString();
-    const cat = db.createPlaylistCategory({
+    const cat = await db.createPlaylistCategory({
       id: `cat_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
       playlistId,
       name: String(name).trim().slice(0, 60),

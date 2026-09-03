@@ -19,7 +19,7 @@ export async function PATCH(
     if (body.minLabel !== undefined) allowed.minLabel = String(body.minLabel).slice(0, 40);
     if (body.maxLabel !== undefined) allowed.maxLabel = String(body.maxLabel).slice(0, 40);
     if (body.color !== undefined) allowed.color = String(body.color).slice(0, 20);
-    const updated = db.updateEmotionalCriterion(criterionId, allowed);
+    const updated = await db.updateEmotionalCriterion(criterionId, allowed);
     if (!updated) return NextResponse.json({ error: "Criterion not found." }, { status: 404 });
     return NextResponse.json({ criterion: updated });
   } catch {
@@ -36,7 +36,7 @@ export async function DELETE(
   if (check.error || !check.user) {
     return NextResponse.json({ error: check.error || "You must be signed in." }, { status: check.status || 401 });
   }
-  const ok = db.deleteEmotionalCriterion(criterionId);
+  const ok = await db.deleteEmotionalCriterion(criterionId);
   if (!ok) return NextResponse.json({ error: "Criterion not found." }, { status: 404 });
   return NextResponse.json({ ok: true });
 }

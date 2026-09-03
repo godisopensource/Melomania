@@ -12,7 +12,7 @@ export async function DELETE(
   if (check.error || !check.user) {
     return NextResponse.json({ error: check.error || "You must be signed in." }, { status: check.status || 401 });
   }
-  const ok = db.deleteGapComment(commentId);
+  const ok = await db.deleteGapComment(commentId);
   if (!ok) return NextResponse.json({ error: "Comment not found." }, { status: 404 });
   return NextResponse.json({ ok: true });
 }

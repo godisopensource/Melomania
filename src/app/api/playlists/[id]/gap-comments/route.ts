@@ -10,7 +10,7 @@ export async function GET(
   { params }: { params: Promise<{ id: string }> }
 ) {
   const { id } = await params;
-  return NextResponse.json({ gapComments: db.getGapComments(id) });
+  return NextResponse.json({ gapComments: await db.getGapComments(id) });
 }
 
 export async function POST(
@@ -29,7 +29,7 @@ export async function POST(
     if (!text || !String(text).trim()) {
       return NextResponse.json({ error: "Comment body is required." }, { status: 400 });
     }
-    const curated = db.getCuratedPlaylist(playlistId);
+    const curated = await db.getCuratedPlaylist(playlistId);
     const count = curated?.tracks.length ?? 0;
     const pos = Number(afterSourcePosition);
     // Sits between track `pos` and `pos + 1`.
@@ -47,7 +47,7 @@ export async function POST(
       createdAt: now,
       updatedAt: now,
     };
-    const saved = db.createGapComment(gap);
+    const saved = await db.createGapComment(gap);
     return NextResponse.json({ gapComment: saved }, { status: 201 });
   } catch {
     return NextResponse.json({ error: "Error saving comment." }, { status: 500 });

@@ -10,20 +10,20 @@ export async function GET(
 ) {
   const { id } = await params;
   const viewer = await getSessionUser();
-  const share = db.getMusicShareById(id, viewer?.id);
+  const share = await db.getMusicShareById(id, viewer?.id);
 
   if (!share) {
     return NextResponse.json({ error: "Share not found." }, { status: 404 });
   }
 
-  if (!db.isShareVisibleTo(share, viewer?.id)) {
+  if (!await db.isShareVisibleTo(share, viewer?.id)) {
     return NextResponse.json({ error: "This share is private." }, { status: 403 });
   }
 
-  const thread = db.getConversationThreadById(share.conversationId);
-  const comments = db.getCommentsByConversationId(share.conversationId);
-  const participants = db.getParticipantsByConversationId(share.conversationId);
-  const sources = db.getMusicSourcesByResourceId(share.resourceId);
+  const thread = await db.getConversationThreadById(share.conversationId);
+  const comments = await db.getCommentsByConversationId(share.conversationId);
+  const participants = await db.getParticipantsByConversationId(share.conversationId);
+  const sources = await db.getMusicSourcesByResourceId(share.resourceId);
 
   return NextResponse.json({
     share,
@@ -44,7 +44,7 @@ export async function DELETE(
   }
 
   const { id } = await params;
-  const share = db.getMusicShareById(id);
+  const share = await db.getMusicShareById(id);
 
   if (!share) {
     return NextResponse.json({ error: "Share not found" }, { status: 404 });
@@ -54,7 +54,7 @@ export async function DELETE(
     return NextResponse.json({ error: "Permission denied" }, { status: 403 });
   }
 
-  db.deleteShareCascade(id);
+  await db.deleteShareCascade(id);
   return NextResponse.json({ success: true });
 }
 
@@ -67,7 +67,7 @@ export async function PATCH(
     return NextResponse.json({ error: "Not authorized" }, { status: 401 });
   }
   const { id } = await params;
-  const share = db.getMusicShareById(id);
+  const share = await db.getMusicShareById(id);
   if (!share) {
     return NextResponse.json({ error: "Share not found" }, { status: 404 });
   }
@@ -81,7 +81,7 @@ export async function PATCH(
       return NextResponse.json({ error: "Provide { action: 'invite', username }." }, { status: 400 });
     }
     const clean = username.trim().replace(/^@/, "").slice(0, 30);
-    const target = db.getUserByUsername(clean);
+    const target = await db.getUserByUsername(clean);
     if (!target) {
       return NextResponse.json({ error: `User not found: @${clean}` }, { status: 404 });
     }
@@ -90,21 +90,21 @@ export async function PATCH(
     }
     const now = new Date().toISOString();
     const rand = Math.random().toString(36).slice(2, 8);
-    const current = db.getMusicShareById(id);
+    const current = await db.getMusicShareById(id);
     const allowed = new Set(current?.allowedUserIds || []);
     allowed.add(target.id);
-    db.updateMusicShare(id, {
+    await db.updateMusicShare(id, {
       visibility: "private",
       allowedUserIds: [...allowed],
     } as any);
-    db.addParticipant({
+    await db.addParticipant({
       id: `part_${Date.now()}_${rand}`,
       conversationId: share.conversationId,
       userId: target.id,
       role: "member",
       joinedAt: now,
     });
-    db.createNotification({
+    await db.createNotification({
       id: `notif_${Date.now()}_${rand}`,
       recipientId: target.id,
       actorId: user.id,
@@ -116,7 +116,7 @@ export async function PATCH(
       message: `${user.displayName} shared a private track with you`,
       createdAt: now,
     });
-    const updated = db.getMusicShareById(id, user.id);
+    const updated = await db.getMusicShareById(id, user.id);
     return NextResponse.json({ share: updated });
   } catch (e) {
     return NextResponse.json({ error: "Unable to invite user." }, { status: 500 });

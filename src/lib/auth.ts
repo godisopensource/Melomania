@@ -44,7 +44,7 @@ export async function getSessionUser(): Promise<User | null> {
     if (!sessionCookie?.value) return null;
     const verified = verifySession(sessionCookie.value);
     if (!verified) return null;
-    return db.getUserById(verified.userId) || null;
+    return await db.getUserById(verified.userId) || null;
   } catch {
     return null;
   }
@@ -61,7 +61,7 @@ export async function loginUser(
   if (passwordPlain.length > 128) return { error: GENERIC_LOGIN_ERROR };
 
   const isEmail = identifier.includes("@");
-  const user = isEmail ? db.getUserByEmail(identifier) : db.getUserByUsername(identifier);
+  const user = isEmail ? await db.getUserByEmail(identifier) : await db.getUserByUsername(identifier);
 
   // Comparaison à temps quasi-constant même si l'utilisateur n'existe pas
   // (anti-énumération par timing).
@@ -114,10 +114,10 @@ export async function registerUser(input: {
 
   // 3. Unicité (messages distincts acceptés ici : le captcha + rate-limit
   //    rendent l'énumération massive impraticable, et l'UX y gagne)
-  if (db.getUserByEmail(email)) {
+  if (await db.getUserByEmail(email)) {
     return { error: "This email address is already in use." };
   }
-  if (db.getUserByUsername(cleanUsername)) {
+  if (await db.getUserByUsername(cleanUsername)) {
     return { error: "This username is already taken." };
   }
 
@@ -137,7 +137,7 @@ export async function registerUser(input: {
     updatedAt: now,
   };
 
-  db.createUser(newUser);
+  await db.createUser(newUser);
   await setSessionCookie(newUser.id);
   return { user: toSafeUser(newUser) };
 }

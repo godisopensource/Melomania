@@ -11,7 +11,7 @@ export async function GET(
   { params }: { params: Promise<{ id: string }> }
 ) {
   const { id } = await params;
-  return NextResponse.json({ criteria: db.getEmotionalCriteria(id) });
+  return NextResponse.json({ criteria: await db.getEmotionalCriteria(id) });
 }
 
 export async function POST(
@@ -23,7 +23,7 @@ export async function POST(
   if (check.error || !check.user) {
     return NextResponse.json({ error: check.error || "You must be signed in." }, { status: check.status || 401 });
   }
-  const curated = db.getCuratedPlaylist(playlistId);
+  const curated = await db.getCuratedPlaylist(playlistId);
   if (!curated) return NextResponse.json({ error: "Playlist not found." }, { status: 404 });
 
   try {
@@ -35,9 +35,9 @@ export async function POST(
     if (!minLabel || !String(minLabel).trim() || !maxLabel || !String(maxLabel).trim()) {
       return NextResponse.json({ error: "Labels for both ends (min and max) are required." }, { status: 400 });
     }
-    const existing = db.getEmotionalCriteria(playlistId);
+    const existing = await db.getEmotionalCriteria(playlistId);
     const now = new Date().toISOString();
-    const criterion = db.createEmotionalCriterion({
+    const criterion = await db.createEmotionalCriterion({
       id: `crit_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
       playlistId,
       name: String(name).trim().slice(0, 40),

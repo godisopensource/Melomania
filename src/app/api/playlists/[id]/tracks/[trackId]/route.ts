@@ -36,12 +36,12 @@ export async function PATCH(
     );
   }
 
-  const resource = db.getMusicResourceById(trackId);
+  const resource = await db.getMusicResourceById(trackId);
   if (!resource) return NextResponse.json({ error: "Track not found." }, { status: 404 });
 
   // If a category is provided, it must belong to this playlist
   if (body.categoryId !== undefined && body.categoryId !== null) {
-    const cats = db.getPlaylistCategories(playlistId);
+    const cats = await db.getPlaylistCategories(playlistId);
     if (!cats.some((c) => c.id === body.categoryId)) {
       return NextResponse.json({ error: "Unknown category for this playlist." }, { status: 400 });
     }
@@ -50,7 +50,7 @@ export async function PATCH(
   // Chronological categories: assigning this track must keep every
   // category on consecutive positions.
   if (body.categoryId !== undefined) {
-    const curated = db.getCuratedPlaylist(playlistId);
+    const curated = await db.getCuratedPlaylist(playlistId);
     if (
       curated &&
       wouldBreakChronology(curated.tracks, trackId, body.categoryId as string | null)
@@ -94,7 +94,7 @@ export async function PATCH(
     if (typeof body.customScores !== "object" || body.customScores === null || Array.isArray(body.customScores)) {
       return NextResponse.json({ error: "customScores must be an object." }, { status: 400 });
     }
-    const criteria = db.getEmotionalCriteria(playlistId);
+    const criteria = await db.getEmotionalCriteria(playlistId);
     const validIds = new Set(criteria.map((c) => c.id));
     customScores = {};
     for (const [key, raw] of Object.entries(body.customScores)) {
@@ -120,9 +120,9 @@ export async function PATCH(
     if (soft !== undefined) updates.softnessScore = soft;
     if (customScores !== undefined) updates.customScores = customScores;
     if (tags !== undefined) updates.tags = tags;
-    db.upsertTrackEnrichment(trackId, updates as any);
-    const curated = db.getCuratedPlaylist(playlistId);
-    const track = curated?.tracks.find((t) => t.id === trackId) ?? db.getMusicResourceById(trackId);
+    await db.upsertTrackEnrichment(trackId, updates as any);
+    const curated = await db.getCuratedPlaylist(playlistId);
+    const track = curated?.tracks.find((t) => t.id === trackId) ?? await db.getMusicResourceById(trackId);
     return NextResponse.json({ track });
   } catch (e: any) {
     return NextResponse.json({ error: e?.message || "Error updating track." }, { status: 422 });

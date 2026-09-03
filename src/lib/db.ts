@@ -2,6 +2,7 @@ import fs from "fs";
 import path from "path";
 import crypto from "crypto";
 import bcrypt from "bcryptjs";
+import { neon } from "@neondatabase/serverless";
 import {
   User,
   MusicResource,
@@ -22,7 +23,6 @@ import {
   GapComment,
   EmotionalCriterion,
 } from "@/types";
-import { encryptToken } from "./encryption";
 
 interface DatabaseSchema {
   users: User[];
@@ -45,7 +45,36 @@ interface DatabaseSchema {
   emotionalCriteria: EmotionalCriterion[];
 }
 
+// ---------------------------------------------------------------------------
+// Durable storage.
+//
+// Why this exists: the database used to live in `.melomania-db.json` on the
+// local filesystem. That file is gitignored (never deployed) and, on Vercel,
+// the filesystem is ephemeral — every deploy (and every serverless instance)
+// starts from an empty seed, wiping users, shares, comments and likes.
+//
+// - Production (Vercel): set `DATABASE_URL` (Neon Postgres, pooled URL).
+//   The whole document is stored as one JSONB row (`melomania_store`), loaded
+//   fresh on every call and saved with an optimistic version guard + retry,
+//   so concurrent serverless instances cannot silently lose each other's
+//   writes and no instance ever serves stale cached data.
+// - Local dev (no `DATABASE_URL`): falls back to `.melomania-db.json`.
+// ---------------------------------------------------------------------------
+
 const DB_FILE_PATH = path.join(process.cwd(), ".melomania-db.json");
+const STORE_ROW_ID = "main";
+
+interface LoadedDoc {
+  data: DatabaseSchema;
+  version: number;
+}
+
+interface DocStore {
+  load(): Promise<LoadedDoc>;
+  /** Conditional write. Returns false on version conflict (caller should retry). */
+  save(data: DatabaseSchema, expectedVersion: number): Promise<boolean>;
+  forceSave(data: DatabaseSchema): Promise<void>;
+}
 
 // Données publiques d'un utilisateur : jamais de passwordHash, jamais d'email.
 // L'email n'est exposé que pour la session elle-même (via /api/auth/me).
@@ -116,314 +145,577 @@ function getInitialSeed(): DatabaseSchema {
   };
 }
 
-class MelomaniaDatabase {
-  private data: DatabaseSchema;
+/**
+ * Non-destructive normalization (ex-migration):
+ * - ensures new collections exist
+ * - backfills immutable sourcePosition from playlist track order
+ * - never reorders, never deletes existing data
+ * Returns the normalized doc + whether it differs from the input (dirty).
+ */
+function normalizeDoc(parsed: any): { data: DatabaseSchema; dirty: boolean } {
+  const data: DatabaseSchema = {
+    users: parsed.users || [],
+    musicResources: parsed.musicResources || [],
+    musicSources: parsed.musicSources || [],
+    musicShares: parsed.musicShares || [],
+    conversationThreads: parsed.conversationThreads || [],
+    conversationParticipants: parsed.conversationParticipants || [],
+    comments: parsed.comments || [],
+    mentions: parsed.mentions || [],
+    externalConnections: parsed.externalConnections || [],
+    exportJobs: parsed.exportJobs || [],
+    trackMatches: parsed.trackMatches || [],
+    notifications: parsed.notifications || [],
+    reports: parsed.reports || [],
+    playlistCategories: parsed.playlistCategories || [],
+    trackEnrichments: parsed.trackEnrichments || [],
+    trackNotes: parsed.trackNotes || [],
+    gapComments: parsed.gapComments || [],
+    emotionalCriteria: parsed.emotionalCriteria || [],
+  };
 
-  constructor() {
-    this.data = this.loadData();
+  let dirty = false;
+  const enrichmentById = new Map(data.trackEnrichments.map((e) => [e.resourceId, e]));
+
+  // Backfill sourcePosition for every track that belongs to a playlist.
+  // Order reference = index inside playlist.tracks array (YouTube Music original order).
+  for (const res of data.musicResources) {
+    if (res.type === "playlist" && Array.isArray((res as any).tracks)) {
+      const tracks = (res as any).tracks as MusicResource[];
+      tracks.forEach((t, idx) => {
+        // Hydrate embedded copy
+        if (t.sourcePosition === undefined || t.sourcePosition === null) {
+          (t as any).sourcePosition = idx;
+          dirty = true;
+        }
+        if (!(t as any).playlistId) {
+          (t as any).playlistId = res.id;
+          dirty = true;
+        }
+        // Mirror into top-level resource if it exists independently
+        const top = data.musicResources.find((r) => r.id === t.id);
+        if (top) {
+          if (top.sourcePosition === undefined || top.sourcePosition === null) {
+            top.sourcePosition = idx;
+            dirty = true;
+          }
+          if (!top.playlistId) {
+            top.playlistId = res.id;
+            dirty = true;
+          }
+        }
+        // Mirror into enrichment table (immutable once set)
+        if (!enrichmentById.has(t.id)) {
+          const e: TrackEnrichment = {
+            resourceId: t.id,
+            playlistId: res.id,
+            sourcePosition: (t as any).sourcePosition ?? idx,
+            categoryId: (t as any).categoryId ?? null,
+            moodScore: (t as any).moodScore ?? null,
+            softnessScore: (t as any).softnessScore ?? null,
+            tags: (t as any).tags ?? [],
+            updatedAt: new Date().toISOString(),
+          };
+          data.trackEnrichments.push(e);
+          enrichmentById.set(t.id, e);
+          dirty = true;
+        }
+      });
+    }
+    // Standalone tracks without position: keep, do not invent order
+    if (res.type === "track" && (res.sourcePosition === undefined || res.sourcePosition === null)) {
+      const e = enrichmentById.get(res.id);
+      if (e) {
+        res.sourcePosition = e.sourcePosition;
+        res.playlistId = e.playlistId;
+        res.categoryId = e.categoryId;
+        res.moodScore = e.moodScore;
+        res.softnessScore = e.softnessScore;
+        res.tags = e.tags;
+        dirty = true;
+      }
+    }
   }
 
-  private loadData(): DatabaseSchema {
+  // Apply enrichments onto top-level resources (enrichment wins only when resource lacks value)
+  for (const e of data.trackEnrichments) {
+    const r = data.musicResources.find((x) => x.id === e.resourceId);
+    if (r) {
+      if (r.sourcePosition === undefined) r.sourcePosition = e.sourcePosition;
+      if (r.categoryId === undefined) r.categoryId = e.categoryId ?? null;
+      if (r.moodScore === undefined) r.moodScore = e.moodScore ?? null;
+      if (r.softnessScore === undefined) r.softnessScore = e.softnessScore ?? null;
+      if (r.tags === undefined) r.tags = e.tags ?? [];
+      if (!r.playlistId && e.playlistId) r.playlistId = e.playlistId;
+    }
+  }
+
+  return { data, dirty };
+}
+
+// --- Module-level finders (operate on an already-loaded doc) ---
+
+function findUserById(data: DatabaseSchema, id: string): User | undefined {
+  return data.users.find((u) => u.id === id);
+}
+
+function findUserByUsername(data: DatabaseSchema, username: string): User | undefined {
+  return data.users.find((u) => u.username.toLowerCase() === username.toLowerCase().trim());
+}
+
+function findUserByEmail(data: DatabaseSchema, email: string): User | undefined {
+  return data.users.find((u) => u.email.toLowerCase() === email.toLowerCase().trim());
+}
+
+function findResourceById(data: DatabaseSchema, id: string): MusicResource | undefined {
+  return data.musicResources.find((r) => r.id === id);
+}
+
+function findSourcesByResourceId(data: DatabaseSchema, resourceId: string): MusicSource[] {
+  return data.musicSources.filter((s) => s.musicResourceId === resourceId);
+}
+
+function findEnrichment(data: DatabaseSchema, resourceId: string): TrackEnrichment | undefined {
+  return data.trackEnrichments.find((e) => e.resourceId === resourceId);
+}
+
+function hydrateShare(data: DatabaseSchema, share: MusicShare, viewerId?: string): MusicShare {
+  const likedBy = share.likedByUserIds || [];
+  const { likedByUserIds: _omit, ...rest } = share as any;
+  void _omit;
+  return {
+    ...rest,
+    likesCount: likedBy.length,
+    hasLiked: viewerId ? likedBy.includes(viewerId) : false,
+    author: publicAuthor(findUserById(data, share.authorId)),
+    resource: findResourceById(data, share.resourceId),
+    sources: findSourcesByResourceId(data, share.resourceId),
+  };
+}
+
+function hydrateThread(data: DatabaseSchema, thread: ConversationThread): ConversationThread {
+  const share = thread.shareId
+    ? (() => {
+        const s = data.musicShares.find((x) => x.id === thread.shareId);
+        return s ? hydrateShare(data, s) : undefined;
+      })()
+    : undefined;
+  return {
+    ...thread,
+    createdBy: publicAuthor(findUserById(data, thread.createdById)),
+    share,
+  };
+}
+
+function hydrateComment(
+  data: DatabaseSchema,
+  comment: Comment,
+  allReplies: Comment[]
+): Comment {
+  const commentReplies = allReplies
+    .filter((r) => r.parentCommentId === comment.id && !r.deletedAt)
+    .map((r) => hydrateComment(data, r, []));
+
+  const attachedResource = comment.attachedResourceId
+    ? findResourceById(data, comment.attachedResourceId)
+    : undefined;
+
+  const mentions = data.mentions.filter((m) => m.commentId === comment.id);
+
+  return {
+    ...comment,
+    author: publicAuthor(findUserById(data, comment.authorId)),
+    attachedResource,
+    mentions,
+    replies: commentReplies.length > 0 ? commentReplies : undefined,
+  };
+}
+
+function hydrateTrackNote(
+  data: DatabaseSchema,
+  note: TrackNote,
+  allReplies: TrackNote[]
+): TrackNote {
+  const replies = allReplies
+    .filter((r) => r.parentNoteId === note.id && !r.deletedAt)
+    .map((r) => hydrateTrackNote(data, r, []))
+    .sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+  const mentions = data.mentions.filter((m) => m.commentId === note.id);
+  return {
+    ...note,
+    author: publicAuthor(findUserById(data, note.authorId)),
+    mentions,
+    replies: replies.length > 0 ? replies : undefined,
+  };
+}
+
+/** A share is visible to viewerId when public, or when author / explicitly allowed / participant. */
+function shareIsVisibleTo(
+  data: DatabaseSchema,
+  share: MusicShare,
+  viewerId?: string | null
+): boolean {
+  if (share.visibility === "public") return true;
+  if (!viewerId) return false;
+  if (share.authorId === viewerId) return true;
+  if (share.allowedUserIds?.includes(viewerId)) return true;
+  const isParticipant = data.conversationParticipants.some(
+    (p) => p.conversationId === share.conversationId && p.userId === viewerId
+  );
+  if (isParticipant) return true;
+  return false;
+}
+
+// --- Doc stores ---
+
+class FileDocStore implements DocStore {
+  private version = 0;
+
+  async load(): Promise<LoadedDoc> {
     try {
       if (fs.existsSync(DB_FILE_PATH)) {
-        const fileContent = fs.readFileSync(DB_FILE_PATH, "utf8");
-        const parsed = JSON.parse(fileContent);
-        // Ensure admin exists with requested credentials
-        const hasAdmin = parsed.users?.some((u: User) => u.username === "admin");
-        if (hasAdmin) {
-          const migrated = this.migrateNonDestructive(parsed);
-          return migrated;
-        }
+        const parsed = JSON.parse(fs.readFileSync(DB_FILE_PATH, "utf8"));
+        return { data: parsed as DatabaseSchema, version: this.version };
       }
     } catch (err) {
-      console.warn("Initializing clean database seed.", err);
+      console.warn("[db] Could not read local database file, reseeding.", err);
     }
-    const initial = getInitialSeed();
-    this.saveToDisk(initial);
-    return initial;
+    const seed = getInitialSeed();
+    try {
+      fs.writeFileSync(DB_FILE_PATH, JSON.stringify(seed, null, 2), "utf8");
+    } catch {}
+    return { data: seed, version: this.version };
+  }
+
+  async save(data: DatabaseSchema, _expectedVersion: number): Promise<boolean> {
+    try {
+      fs.writeFileSync(DB_FILE_PATH, JSON.stringify(data, null, 2), "utf8");
+    } catch {
+      // Memory fallback for read-only environments
+    }
+    this.version++;
+    return true;
+  }
+
+  async forceSave(data: DatabaseSchema): Promise<void> {
+    await this.save(data, this.version);
+  }
+}
+
+type NeonSql = ReturnType<typeof neon>;
+
+function getNeonSql(): NeonSql {
+  const g = globalThis as any;
+  const url = process.env.DATABASE_URL as string;
+  if (!g.__melomania_sql || g.__melomania_sql_url !== url) {
+    g.__melomania_sql = neon(url);
+    g.__melomania_sql_url = url;
+  }
+  return g.__melomania_sql as NeonSql;
+}
+
+class PostgresDocStore implements DocStore {
+  private initPromise: Promise<void> | null = null;
+
+  private ensureInit(): Promise<void> {
+    if (!this.initPromise) {
+      this.initPromise = (async () => {
+        const sql = getNeonSql();
+        await sql`CREATE TABLE IF NOT EXISTS melomania_store (
+          id TEXT PRIMARY KEY,
+          version BIGINT NOT NULL DEFAULT 1,
+          data JSONB NOT NULL,
+          updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+        )`;
+        const rows = (await sql`SELECT version, data FROM melomania_store WHERE id = ${STORE_ROW_ID}`) as any[];
+        if (rows.length === 0) {
+          const seed = getInitialSeed();
+          try {
+            await sql`INSERT INTO melomania_store (id, version, data) VALUES (${STORE_ROW_ID}, 1, ${JSON.stringify(seed)}::jsonb)`;
+          } catch {
+            // Lost a cold-start race with another instance: the row exists now.
+          }
+        }
+      })().catch((err) => {
+        this.initPromise = null;
+        throw err;
+      });
+    }
+    return this.initPromise;
+  }
+
+  async load(): Promise<LoadedDoc> {
+    await this.ensureInit();
+    const sql = getNeonSql();
+    const rows = (await sql`SELECT version, data FROM melomania_store WHERE id = ${STORE_ROW_ID}`) as any[];
+    if (rows.length === 0) {
+      // Extremely defensive: init raced and rolled back — reseed via upsert.
+      const seed = getInitialSeed();
+      await this.forceSave(seed);
+      return { data: seed, version: 1 };
+    }
+    const data = typeof rows[0].data === "string" ? JSON.parse(rows[0].data) : rows[0].data;
+    return { data: data as DatabaseSchema, version: Number(rows[0].version) };
+  }
+
+  async save(data: DatabaseSchema, expectedVersion: number): Promise<boolean> {
+    await this.ensureInit();
+    const sql = getNeonSql();
+    const rows = (await sql`UPDATE melomania_store
+      SET data = ${JSON.stringify(data)}::jsonb, version = version + 1, updated_at = now()
+      WHERE id = ${STORE_ROW_ID} AND version = ${expectedVersion}
+      RETURNING version`) as any[];
+    return rows.length === 1;
+  }
+
+  async forceSave(data: DatabaseSchema): Promise<void> {
+    await this.ensureInit();
+    const sql = getNeonSql();
+    await sql`INSERT INTO melomania_store (id, version, data)
+      VALUES (${STORE_ROW_ID}, 1, ${JSON.stringify(data)}::jsonb)
+      ON CONFLICT (id) DO UPDATE
+      SET data = EXCLUDED.data, version = melomania_store.version + 1, updated_at = now()`;
+  }
+}
+
+function getStore(): DocStore {
+  const g = globalThis as any;
+  if (process.env.DATABASE_URL) {
+    if (!g.__melomania_pg_store) g.__melomania_pg_store = new PostgresDocStore();
+    return g.__melomania_pg_store as DocStore;
+  }
+  if (!g.__melomania_file_store) g.__melomania_file_store = new FileDocStore();
+  return g.__melomania_file_store as DocStore;
+}
+
+/**
+ * Load a fresh, normalized document. Never cached across calls: on serverless,
+ * each instance must see writes committed by other instances (and survive
+ * redeploys — durability comes from Postgres, not memory).
+ */
+async function loadDoc(): Promise<LoadedDoc> {
+  const store = getStore();
+  const loaded = await store.load();
+  const parsed: any = loaded.data;
+  const hasAdmin =
+    parsed &&
+    Array.isArray(parsed.users) &&
+    parsed.users.some((u: User) => u.username === "admin");
+  if (!hasAdmin) {
+    const fresh = getInitialSeed();
+    await store.forceSave(fresh);
+    return { data: fresh, version: loaded.version + 1 };
+  }
+  const { data, dirty } = normalizeDoc(parsed);
+  if (dirty) {
+    try {
+      await store.forceSave(data);
+    } catch {}
+  }
+  return { data, version: loaded.version };
+}
+
+class MelomaniaDatabase {
+  /** Fresh read — no cross-request caching (serverless-safe). */
+  private async read(): Promise<DatabaseSchema> {
+    return (await loadDoc()).data;
   }
 
   /**
-   * Non-destructive migration:
-   * - ensures new collections exist
-   * - backfills immutable sourcePosition from playlist track order
-   * - never reorders, never deletes existing data
+   * Read-modify-write with optimistic concurrency.
+   * The mutation fn is pure (operates on the fresh doc, throws on validation
+   * errors without persisting). On version conflict the whole cycle reloads
+   * and retries, so concurrent requests don't silently drop writes.
    */
-  private migrateNonDestructive(parsed: any): DatabaseSchema {
-    const data: DatabaseSchema = {
-      users: parsed.users || [],
-      musicResources: parsed.musicResources || [],
-      musicSources: parsed.musicSources || [],
-      musicShares: parsed.musicShares || [],
-      conversationThreads: parsed.conversationThreads || [],
-      conversationParticipants: parsed.conversationParticipants || [],
-      comments: parsed.comments || [],
-      mentions: parsed.mentions || [],
-      externalConnections: parsed.externalConnections || [],
-      exportJobs: parsed.exportJobs || [],
-      trackMatches: parsed.trackMatches || [],
-      notifications: parsed.notifications || [],
-      reports: parsed.reports || [],
-      playlistCategories: parsed.playlistCategories || [],
-      trackEnrichments: parsed.trackEnrichments || [],
-      trackNotes: parsed.trackNotes || [],
-      gapComments: parsed.gapComments || [],
-      emotionalCriteria: parsed.emotionalCriteria || [],
-    };
-
-    let dirty = false;
-    const enrichmentById = new Map(data.trackEnrichments.map((e) => [e.resourceId, e]));
-
-    // Backfill sourcePosition for every track that belongs to a playlist.
-    // Order reference = index inside playlist.tracks array (YouTube Music original order).
-    for (const res of data.musicResources) {
-      if (res.type === "playlist" && Array.isArray((res as any).tracks)) {
-        const tracks = (res as any).tracks as MusicResource[];
-        tracks.forEach((t, idx) => {
-          // Hydrate embedded copy
-          if (t.sourcePosition === undefined || t.sourcePosition === null) {
-            (t as any).sourcePosition = idx;
-            dirty = true;
-          }
-          if (!(t as any).playlistId) {
-            (t as any).playlistId = res.id;
-            dirty = true;
-          }
-          // Mirror into top-level resource if it exists independently
-          const top = data.musicResources.find((r) => r.id === t.id);
-          if (top) {
-            if (top.sourcePosition === undefined || top.sourcePosition === null) {
-              top.sourcePosition = idx;
-              dirty = true;
-            }
-            if (!top.playlistId) {
-              top.playlistId = res.id;
-              dirty = true;
-            }
-          }
-          // Mirror into enrichment table (immutable once set)
-          if (!enrichmentById.has(t.id)) {
-            const e: TrackEnrichment = {
-              resourceId: t.id,
-              playlistId: res.id,
-              sourcePosition: (t as any).sourcePosition ?? idx,
-              categoryId: (t as any).categoryId ?? null,
-              moodScore: (t as any).moodScore ?? null,
-              softnessScore: (t as any).softnessScore ?? null,
-              tags: (t as any).tags ?? [],
-              updatedAt: new Date().toISOString(),
-            };
-            data.trackEnrichments.push(e);
-            enrichmentById.set(t.id, e);
-            dirty = true;
-          }
-        });
-      }
-      // Standalone tracks without position: keep, do not invent order
-      if (res.type === "track" && (res.sourcePosition === undefined || res.sourcePosition === null)) {
-        const e = enrichmentById.get(res.id);
-        if (e) {
-          res.sourcePosition = e.sourcePosition;
-          res.playlistId = e.playlistId;
-          res.categoryId = e.categoryId;
-          res.moodScore = e.moodScore;
-          res.softnessScore = e.softnessScore;
-          res.tags = e.tags;
-          dirty = true;
-        }
-      }
+  private async mutate<T>(fn: (data: DatabaseSchema) => T): Promise<T> {
+    const store = getStore();
+    let lastData: DatabaseSchema | null = null;
+    let lastResult: T | undefined;
+    for (let attempt = 0; attempt < 5; attempt++) {
+      const loaded = await loadDoc();
+      lastData = loaded.data;
+      lastResult = fn(lastData); // may throw (validation) — nothing persisted
+      const ok = await store.save(lastData, loaded.version);
+      if (ok) return lastResult;
     }
-
-    // Apply enrichments onto top-level resources (enrichment wins only when resource lacks value)
-    for (const e of data.trackEnrichments) {
-      const r = data.musicResources.find((x) => x.id === e.resourceId);
-      if (r) {
-        if (r.sourcePosition === undefined) r.sourcePosition = e.sourcePosition;
-        if (r.categoryId === undefined) r.categoryId = e.categoryId ?? null;
-        if (r.moodScore === undefined) r.moodScore = e.moodScore ?? null;
-        if (r.softnessScore === undefined) r.softnessScore = e.softnessScore ?? null;
-        if (r.tags === undefined) r.tags = e.tags ?? [];
-        if (!r.playlistId && e.playlistId) r.playlistId = e.playlistId;
-      }
-    }
-
-    if (dirty) {
-      try {
-        fs.writeFileSync(DB_FILE_PATH, JSON.stringify(data, null, 2), "utf8");
-      } catch {}
-    }
-    return data;
-  }
-
-  private saveToDisk(data: DatabaseSchema) {
-    try {
-      fs.writeFileSync(DB_FILE_PATH, JSON.stringify(data, null, 2), "utf8");
-    } catch (err) {
-      // Memory fallback for serverless environments
-    }
-  }
-
-  private persist() {
-    this.saveToDisk(this.data);
+    // Extremely contended row: last write wins rather than losing the mutation.
+    await store.forceSave(lastData as DatabaseSchema);
+    return lastResult as T;
   }
 
   // --- USERS ---
-  getUsers(): User[] {
-    return this.data.users;
+  async getUsers(): Promise<User[]> {
+    return (await this.read()).users;
   }
 
-  getUserById(id: string): User | undefined {
-    return this.data.users.find((u) => u.id === id);
+  async getUserById(id: string): Promise<User | undefined> {
+    return findUserById(await this.read(), id);
   }
 
-  getUserByUsername(username: string): User | undefined {
-    return this.data.users.find((u) => u.username.toLowerCase() === username.toLowerCase().trim());
+  async getUserByUsername(username: string): Promise<User | undefined> {
+    return findUserByUsername(await this.read(), username);
   }
 
-  getUserByEmail(email: string): User | undefined {
-    return this.data.users.find((u) => u.email.toLowerCase() === email.toLowerCase().trim());
+  async getUserByEmail(email: string): Promise<User | undefined> {
+    return findUserByEmail(await this.read(), email);
   }
 
-  createUser(user: User): User {
-    this.data.users.push(user);
-    this.persist();
-    return user;
+  async createUser(user: User): Promise<User> {
+    return this.mutate((data) => {
+      data.users.push(user);
+      return user;
+    });
   }
 
-  updateUser(id: string, updates: Partial<User>): User | null {
-    const idx = this.data.users.findIndex((u) => u.id === id);
-    if (idx === -1) return null;
-    this.data.users[idx] = {
-      ...this.data.users[idx],
-      ...updates,
-      updatedAt: new Date().toISOString(),
-    };
-    this.persist();
-    return this.data.users[idx];
+  async updateUser(id: string, updates: Partial<User>): Promise<User | null> {
+    return this.mutate((data) => {
+      const idx = data.users.findIndex((u) => u.id === id);
+      if (idx === -1) return null;
+      data.users[idx] = {
+        ...data.users[idx],
+        ...updates,
+        updatedAt: new Date().toISOString(),
+      };
+      return data.users[idx];
+    });
   }
 
-  deleteUser(id: string): boolean {
-    const initialLen = this.data.users.length;
-    this.data.users = this.data.users.filter((u) => u.id !== id);
-    this.persist();
-    return this.data.users.length !== initialLen;
+  async deleteUser(id: string): Promise<boolean> {
+    return this.mutate((data) => {
+      const initialLen = data.users.length;
+      data.users = data.users.filter((u) => u.id !== id);
+      return data.users.length !== initialLen;
+    });
   }
 
   // --- MUSIC RESOURCES ---
-  getMusicResources(): MusicResource[] {
-    return this.data.musicResources;
+  async getMusicResources(): Promise<MusicResource[]> {
+    return (await this.read()).musicResources;
   }
 
-  getMusicResourceById(id: string): MusicResource | undefined {
-    return this.data.musicResources.find((r) => r.id === id);
+  async getMusicResourceById(id: string): Promise<MusicResource | undefined> {
+    return findResourceById(await this.read(), id);
   }
 
-  createMusicResource(resource: MusicResource): MusicResource {
-    this.data.musicResources.push(resource);
-    this.persist();
-    return resource;
+  async createMusicResource(resource: MusicResource): Promise<MusicResource> {
+    return this.mutate((data) => {
+      data.musicResources.push(resource);
+      return resource;
+    });
   }
 
-  updateMusicResource(id: string, updates: Partial<MusicResource>): MusicResource | null {
-    const idx = this.data.musicResources.findIndex((r) => r.id === id);
-    if (idx === -1) return null;
-    this.data.musicResources[idx] = {
-      ...this.data.musicResources[idx],
-      ...updates,
-      updatedAt: new Date().toISOString(),
-    };
-    this.persist();
-    return this.data.musicResources[idx];
+  async updateMusicResource(
+    id: string,
+    updates: Partial<MusicResource>
+  ): Promise<MusicResource | null> {
+    return this.mutate((data) => {
+      const idx = data.musicResources.findIndex((r) => r.id === id);
+      if (idx === -1) return null;
+      data.musicResources[idx] = {
+        ...data.musicResources[idx],
+        ...updates,
+        updatedAt: new Date().toISOString(),
+      };
+      return data.musicResources[idx];
+    });
   }
 
   // --- MUSIC SOURCES ---
-  getMusicSourcesByResourceId(resourceId: string): MusicSource[] {
-    return this.data.musicSources.filter((s) => s.musicResourceId === resourceId);
+  async getMusicSourcesByResourceId(resourceId: string): Promise<MusicSource[]> {
+    return findSourcesByResourceId(await this.read(), resourceId);
   }
 
-  getMusicSourceByExternalId(provider: string, externalId: string): MusicSource | undefined {
-    return this.data.musicSources.find(
-      (s) => s.provider === provider && s.externalId === externalId
-    );
+  async getMusicSourceByExternalId(
+    provider: string,
+    externalId: string
+  ): Promise<MusicSource | undefined> {
+    const data = await this.read();
+    return data.musicSources.find((s) => s.provider === provider && s.externalId === externalId);
   }
 
-  createMusicSource(source: MusicSource): MusicSource {
-    this.data.musicSources.push(source);
-    this.persist();
-    return source;
+  async createMusicSource(source: MusicSource): Promise<MusicSource> {
+    return this.mutate((data) => {
+      data.musicSources.push(source);
+      return source;
+    });
   }
 
   // --- MUSIC SHARES ---
-  getMusicShares(viewerId?: string): MusicShare[] {
-    return this.data.musicShares.map((share) => this.hydrateShare(share, viewerId));
+  async getMusicShares(viewerId?: string): Promise<MusicShare[]> {
+    const data = await this.read();
+    return data.musicShares.map((share) => hydrateShare(data, share, viewerId));
   }
 
-  getMusicShareById(id: string, viewerId?: string): MusicShare | undefined {
-    const share = this.data.musicShares.find((s) => s.id === id);
-    return share ? this.hydrateShare(share, viewerId) : undefined;
+  async getMusicShareById(id: string, viewerId?: string): Promise<MusicShare | undefined> {
+    const data = await this.read();
+    const share = data.musicShares.find((s) => s.id === id);
+    return share ? hydrateShare(data, share, viewerId) : undefined;
   }
 
-  getMusicSharesByAuthorId(authorId: string, viewerId?: string): MusicShare[] {
-    return this.data.musicShares
+  async getMusicSharesByAuthorId(authorId: string, viewerId?: string): Promise<MusicShare[]> {
+    const data = await this.read();
+    return data.musicShares
       .filter((s) => s.authorId === authorId)
-      .map((s) => this.hydrateShare(s, viewerId));
+      .map((s) => hydrateShare(data, s, viewerId));
   }
 
-  createMusicShare(share: MusicShare): MusicShare {
-    // Defaults for new persistence fields (non-destructive for legacy data)
-    if (!share.likedByUserIds) share.likedByUserIds = [];
-    if (!share.allowedUserIds) share.allowedUserIds = [];
-    if (share.likesCount === undefined) share.likesCount = 0;
-    this.data.musicShares.unshift(share);
-    this.persist();
-    return this.hydrateShare(share);
+  async createMusicShare(share: MusicShare): Promise<MusicShare> {
+    return this.mutate((data) => {
+      // Defaults for new persistence fields (non-destructive for legacy data)
+      if (!share.likedByUserIds) share.likedByUserIds = [];
+      if (!share.allowedUserIds) share.allowedUserIds = [];
+      if (share.likesCount === undefined) share.likesCount = 0;
+      data.musicShares.unshift(share);
+      return hydrateShare(data, share);
+    });
   }
 
-  updateMusicShare(id: string, updates: Partial<MusicShare>): MusicShare | null {
-    const share = this.data.musicShares.find((s) => s.id === id);
-    if (!share) return null;
-    // Likes are only mutated via toggleShareLike — never by a raw update.
-    const { likedByUserIds: _l, likesCount: _c, ...safe } = updates as any;
-    Object.assign(share, safe, { updatedAt: new Date().toISOString() });
-    this.persist();
-    return this.hydrateShare(share);
+  async updateMusicShare(id: string, updates: Partial<MusicShare>): Promise<MusicShare | null> {
+    return this.mutate((data) => {
+      const share = data.musicShares.find((s) => s.id === id);
+      if (!share) return null;
+      // Likes are only mutated via toggleShareLike — never by a raw update.
+      const { likedByUserIds: _l, likesCount: _c, ...safe } = updates as any;
+      Object.assign(share, safe, { updatedAt: new Date().toISOString() });
+      return hydrateShare(data, share);
+    });
   }
 
   /** Toggle a like. Returns the hydrated share + whether the user now likes it. */
-  toggleShareLike(shareId: string, userId: string): { share: MusicShare; liked: boolean } | null {
-    const share = this.data.musicShares.find((s) => s.id === shareId);
-    if (!share) return null;
-    if (!share.likedByUserIds) share.likedByUserIds = [];
-    const idx = share.likedByUserIds.indexOf(userId);
-    let liked: boolean;
-    if (idx >= 0) {
-      share.likedByUserIds.splice(idx, 1);
-      liked = false;
-    } else {
-      share.likedByUserIds.push(userId);
-      liked = true;
-    }
-    share.likesCount = share.likedByUserIds.length;
-    share.updatedAt = new Date().toISOString();
-    this.persist();
-    return { share: this.hydrateShare(share, userId), liked };
+  async toggleShareLike(
+    shareId: string,
+    userId: string
+  ): Promise<{ share: MusicShare; liked: boolean } | null> {
+    return this.mutate((data) => {
+      const share = data.musicShares.find((s) => s.id === shareId);
+      if (!share) return null;
+      if (!share.likedByUserIds) share.likedByUserIds = [];
+      const idx = share.likedByUserIds.indexOf(userId);
+      let liked: boolean;
+      if (idx >= 0) {
+        share.likedByUserIds.splice(idx, 1);
+        liked = false;
+      } else {
+        share.likedByUserIds.push(userId);
+        liked = true;
+      }
+      share.likesCount = share.likedByUserIds.length;
+      share.updatedAt = new Date().toISOString();
+      return { share: hydrateShare(data, share, userId), liked };
+    });
   }
 
   /** A share is visible to viewerId when public, or when author / explicitly allowed / participant. */
-  isShareVisibleTo(share: MusicShare, viewerId?: string | null): boolean {
-    if (share.visibility === "public") return true;
-    if (!viewerId) return false;
-    if (share.authorId === viewerId) return true;
-    if (share.allowedUserIds?.includes(viewerId)) return true;
-    const isParticipant = this.data.conversationParticipants.some(
-      (p) => p.conversationId === share.conversationId && p.userId === viewerId
-    );
-    if (isParticipant) return true;
-    return false;
+  async isShareVisibleTo(share: MusicShare, viewerId?: string | null): Promise<boolean> {
+    const data = await this.read();
+    // Re-resolve against fresh data (the passed share may come from another instance).
+    const fresh = data.musicShares.find((s) => s.id === share.id) ?? share;
+    return shareIsVisibleTo(data, fresh, viewerId);
   }
 
   /** Most used tags across shares + track enrichments. */
-  getTopTags(limit = 12): { tag: string; count: number }[] {
+  async getTopTags(limit = 12): Promise<{ tag: string; count: number }[]> {
+    const data = await this.read();
     const counts = new Map<string, number>();
     const add = (tags?: string[]) => {
       for (const raw of tags || []) {
@@ -432,9 +724,9 @@ class MelomaniaDatabase {
         counts.set(t, (counts.get(t) || 0) + 1);
       }
     };
-    for (const s of this.data.musicShares) add(s.tags);
-    for (const e of this.data.trackEnrichments) add(e.tags);
-    for (const r of this.data.musicResources) add(r.tags);
+    for (const s of data.musicShares) add(s.tags);
+    for (const e of data.trackEnrichments) add(e.tags);
+    for (const r of data.musicResources) add(r.tags);
     return [...counts.entries()]
       .map(([tag, count]) => ({ tag, count }))
       .sort((a, b) => b.count - a.count || a.tag.localeCompare(b.tag))
@@ -442,529 +734,542 @@ class MelomaniaDatabase {
   }
 
   /** Delete a share + its conversation (participants, comments, mentions). Keeps music resources. */
-  deleteShareCascade(id: string): boolean {
-    const share = this.data.musicShares.find((s) => s.id === id);
-    if (!share) return false;
-    const convId = share.conversationId;
-    this.data.musicShares = this.data.musicShares.filter((s) => s.id !== id);
-    this.data.conversationThreads = this.data.conversationThreads.filter((t) => t.id !== convId);
-    this.data.conversationParticipants = this.data.conversationParticipants.filter(
-      (p) => p.conversationId !== convId
-    );
-    const commentIds = new Set(
-      this.data.comments.filter((c) => c.conversationId === convId).map((c) => c.id)
-    );
-    this.data.comments = this.data.comments.filter((c) => c.conversationId !== convId);
-    if (commentIds.size > 0) {
-      this.data.mentions = this.data.mentions.filter((m) => !commentIds.has(m.commentId));
-    }
-    this.persist();
-    return true;
+  async deleteShareCascade(id: string): Promise<boolean> {
+    return this.mutate((data) => {
+      const share = data.musicShares.find((s) => s.id === id);
+      if (!share) return false;
+      const convId = share.conversationId;
+      data.musicShares = data.musicShares.filter((s) => s.id !== id);
+      data.conversationThreads = data.conversationThreads.filter((t) => t.id !== convId);
+      data.conversationParticipants = data.conversationParticipants.filter(
+        (p) => p.conversationId !== convId
+      );
+      const commentIds = new Set(
+        data.comments.filter((c) => c.conversationId === convId).map((c) => c.id)
+      );
+      data.comments = data.comments.filter((c) => c.conversationId !== convId);
+      if (commentIds.size > 0) {
+        data.mentions = data.mentions.filter((m) => !commentIds.has(m.commentId));
+      }
+      return true;
+    });
   }
 
-  deleteMusicShare(id: string): boolean {
-    const initialLen = this.data.musicShares.length;
-    this.data.musicShares = this.data.musicShares.filter((s) => s.id !== id);
-    this.persist();
-    return this.data.musicShares.length !== initialLen;
-  }
-
-  private hydrateShare(share: MusicShare, viewerId?: string): MusicShare {
-    const likedBy = share.likedByUserIds || [];
-    const { likedByUserIds: _omit, ...rest } = share as any;
-    void _omit;
-    return {
-      ...rest,
-      likesCount: likedBy.length,
-      hasLiked: viewerId ? likedBy.includes(viewerId) : false,
-      author: publicAuthor(this.getUserById(share.authorId)),
-      resource: this.getMusicResourceById(share.resourceId),
-      sources: this.getMusicSourcesByResourceId(share.resourceId),
-    };
+  async deleteMusicShare(id: string): Promise<boolean> {
+    return this.mutate((data) => {
+      const initialLen = data.musicShares.length;
+      data.musicShares = data.musicShares.filter((s) => s.id !== id);
+      return data.musicShares.length !== initialLen;
+    });
   }
 
   // --- CONVERSATION THREADS ---
-  getConversationThreads(): ConversationThread[] {
-    return this.data.conversationThreads.map((t) => this.hydrateThread(t));
+  async getConversationThreads(): Promise<ConversationThread[]> {
+    const data = await this.read();
+    return data.conversationThreads.map((t) => hydrateThread(data, t));
   }
 
-  getConversationThreadById(id: string): ConversationThread | undefined {
-    const thread = this.data.conversationThreads.find((t) => t.id === id);
-    return thread ? this.hydrateThread(thread) : undefined;
+  async getConversationThreadById(id: string): Promise<ConversationThread | undefined> {
+    const data = await this.read();
+    const thread = data.conversationThreads.find((t) => t.id === id);
+    return thread ? hydrateThread(data, thread) : undefined;
   }
 
-  createConversationThread(thread: ConversationThread): ConversationThread {
-    this.data.conversationThreads.unshift(thread);
-    this.persist();
-    return this.hydrateThread(thread);
+  async createConversationThread(thread: ConversationThread): Promise<ConversationThread> {
+    return this.mutate((data) => {
+      data.conversationThreads.unshift(thread);
+      return hydrateThread(data, thread);
+    });
   }
 
-  updateConversationActivity(id: string) {
-    const thread = this.data.conversationThreads.find((t) => t.id === id);
-    if (thread) {
-      thread.lastActivityAt = new Date().toISOString();
-      this.persist();
-    }
-  }
-
-  private hydrateThread(thread: ConversationThread): ConversationThread {
-    const share = thread.shareId ? this.getMusicShareById(thread.shareId) : undefined;
-    return {
-      ...thread,
-      createdBy: publicAuthor(this.getUserById(thread.createdById)),
-      share,
-    };
+  async updateConversationActivity(id: string): Promise<void> {
+    await this.mutate((data) => {
+      const thread = data.conversationThreads.find((t) => t.id === id);
+      if (thread) {
+        thread.lastActivityAt = new Date().toISOString();
+      }
+    });
   }
 
   // --- CONVERSATION PARTICIPANTS ---
-  getParticipantsByConversationId(conversationId: string): ConversationParticipant[] {
-    return this.data.conversationParticipants
+  async getParticipantsByConversationId(
+    conversationId: string
+  ): Promise<ConversationParticipant[]> {
+    const data = await this.read();
+    return data.conversationParticipants
       .filter((p) => p.conversationId === conversationId)
       .map((p) => ({
         ...p,
-        user: publicAuthor(this.getUserById(p.userId)),
+        user: publicAuthor(findUserById(data, p.userId)),
       }));
   }
 
-  addParticipant(participant: ConversationParticipant): ConversationParticipant {
-    const exists = this.data.conversationParticipants.find(
-      (p) => p.conversationId === participant.conversationId && p.userId === participant.userId
-    );
-    if (exists) return exists;
-    this.data.conversationParticipants.push(participant);
-    this.persist();
-    return participant;
+  async addParticipant(participant: ConversationParticipant): Promise<ConversationParticipant> {
+    return this.mutate((data) => {
+      const exists = data.conversationParticipants.find(
+        (p) => p.conversationId === participant.conversationId && p.userId === participant.userId
+      );
+      if (exists) return exists;
+      data.conversationParticipants.push(participant);
+      return participant;
+    });
   }
 
   // --- COMMENTS ---
-  getCommentsByConversationId(conversationId: string): Comment[] {
-    const rawComments = this.data.comments.filter(
+  async getCommentsByConversationId(conversationId: string): Promise<Comment[]> {
+    const data = await this.read();
+    const rawComments = data.comments.filter(
       (c) => c.conversationId === conversationId && !c.deletedAt
     );
 
     const topLevel = rawComments.filter((c) => !c.parentCommentId);
     const replies = rawComments.filter((c) => !!c.parentCommentId);
 
-    return topLevel.map((c) => this.hydrateComment(c, replies));
+    return topLevel.map((c) => hydrateComment(data, c, replies));
   }
 
-  getCommentById(id: string): Comment | undefined {
-    const comment = this.data.comments.find((c) => c.id === id);
-    return comment ? this.hydrateComment(comment, []) : undefined;
+  async getCommentById(id: string): Promise<Comment | undefined> {
+    const data = await this.read();
+    const comment = data.comments.find((c) => c.id === id);
+    return comment ? hydrateComment(data, comment, []) : undefined;
   }
 
   /** Most recent non-deleted comments by a user (for public profiles). */
-  getRecentCommentsByUserId(userId: string, limit = 3): Comment[] {
-    return this.data.comments
+  async getRecentCommentsByUserId(userId: string, limit = 3): Promise<Comment[]> {
+    const data = await this.read();
+    return data.comments
       .filter((c) => c.authorId === userId && !c.deletedAt)
       .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
       .slice(0, Math.max(1, Math.min(20, limit)))
-      .map((c) => this.hydrateComment(c, []));
+      .map((c) => hydrateComment(data, c, []));
   }
 
-  createComment(comment: Comment): Comment {
-    this.data.comments.push(comment);
-    this.updateConversationActivity(comment.conversationId);
-    this.persist();
-    return this.hydrateComment(comment, []);
+  async createComment(comment: Comment): Promise<Comment> {
+    return this.mutate((data) => {
+      data.comments.push(comment);
+      const thread = data.conversationThreads.find((t) => t.id === comment.conversationId);
+      if (thread) thread.lastActivityAt = new Date().toISOString();
+      return hydrateComment(data, comment, []);
+    });
   }
 
-  updateComment(id: string, updates: Partial<Comment>): Comment | null {
-    const idx = this.data.comments.findIndex((c) => c.id === id);
-    if (idx === -1) return null;
-    this.data.comments[idx] = {
-      ...this.data.comments[idx],
-      ...updates,
-      isEdited: true,
-      updatedAt: new Date().toISOString(),
-    };
-    this.persist();
-    return this.hydrateComment(this.data.comments[idx], []);
+  async updateComment(id: string, updates: Partial<Comment>): Promise<Comment | null> {
+    return this.mutate((data) => {
+      const idx = data.comments.findIndex((c) => c.id === id);
+      if (idx === -1) return null;
+      data.comments[idx] = {
+        ...data.comments[idx],
+        ...updates,
+        isEdited: true,
+        updatedAt: new Date().toISOString(),
+      };
+      return hydrateComment(data, data.comments[idx], []);
+    });
   }
 
-  deleteComment(id: string): boolean {
-    const comment = this.data.comments.find((c) => c.id === id);
-    if (!comment) return false;
-    comment.deletedAt = new Date().toISOString();
-    this.persist();
-    return true;
+  async deleteComment(id: string): Promise<boolean> {
+    return this.mutate((data) => {
+      const comment = data.comments.find((c) => c.id === id);
+      if (!comment) return false;
+      comment.deletedAt = new Date().toISOString();
+      return true;
+    });
   }
 
-  toggleCommentReaction(commentId: string, emoji: string, userId: string): Comment | null {
-    const comment = this.data.comments.find((c) => c.id === commentId);
-    if (!comment) return null;
-    if (!comment.reactions) comment.reactions = {};
+  async toggleCommentReaction(
+    commentId: string,
+    emoji: string,
+    userId: string
+  ): Promise<Comment | null> {
+    return this.mutate((data) => {
+      const comment = data.comments.find((c) => c.id === commentId);
+      if (!comment) return null;
+      if (!comment.reactions) comment.reactions = {};
 
-    const existingUsers = comment.reactions[emoji] || [];
-    if (existingUsers.includes(userId)) {
-      comment.reactions[emoji] = existingUsers.filter((u) => u !== userId);
-      if (comment.reactions[emoji].length === 0) {
-        delete comment.reactions[emoji];
+      const existingUsers = comment.reactions[emoji] || [];
+      if (existingUsers.includes(userId)) {
+        comment.reactions[emoji] = existingUsers.filter((u) => u !== userId);
+        if (comment.reactions[emoji].length === 0) {
+          delete comment.reactions[emoji];
+        }
+      } else {
+        comment.reactions[emoji] = [...existingUsers, userId];
       }
-    } else {
-      comment.reactions[emoji] = [...existingUsers, userId];
-    }
 
-    this.persist();
-    return this.hydrateComment(comment, []);
-  }
-
-  private hydrateComment(comment: Comment, allReplies: Comment[]): Comment {
-    const commentReplies = allReplies
-      .filter((r) => r.parentCommentId === comment.id && !r.deletedAt)
-      .map((r) => this.hydrateComment(r, []));
-
-    const attachedResource = comment.attachedResourceId
-      ? this.getMusicResourceById(comment.attachedResourceId)
-      : undefined;
-
-    const mentions = this.data.mentions.filter((m) => m.commentId === comment.id);
-
-    return {
-      ...comment,
-      author: publicAuthor(this.getUserById(comment.authorId)),
-      attachedResource,
-      mentions,
-      replies: commentReplies.length > 0 ? commentReplies : undefined,
-    };
+      return hydrateComment(data, comment, []);
+    });
   }
 
   // --- MENTIONS ---
-  createMention(mention: Mention): Mention {
-    this.data.mentions.push(mention);
-    this.persist();
-    return mention;
+  async createMention(mention: Mention): Promise<Mention> {
+    return this.mutate((data) => {
+      data.mentions.push(mention);
+      return mention;
+    });
   }
 
   // --- EXTERNAL CONNECTIONS ---
-  getConnectionsByUserId(userId: string): ExternalConnection[] {
-    return this.data.externalConnections.filter((c) => c.userId === userId);
+  async getConnectionsByUserId(userId: string): Promise<ExternalConnection[]> {
+    const data = await this.read();
+    return data.externalConnections.filter((c) => c.userId === userId);
   }
 
-  getConnection(userId: string, provider: 'spotify' | 'apple_music'): ExternalConnection | undefined {
-    return this.data.externalConnections.find(
-      (c) => c.userId === userId && c.provider === provider
-    );
+  async getConnection(
+    userId: string,
+    provider: 'spotify' | 'apple_music'
+  ): Promise<ExternalConnection | undefined> {
+    const data = await this.read();
+    return data.externalConnections.find((c) => c.userId === userId && c.provider === provider);
   }
 
-  saveConnection(connection: ExternalConnection): ExternalConnection {
-    const idx = this.data.externalConnections.findIndex(
-      (c) => c.userId === connection.userId && c.provider === connection.provider
-    );
-    if (idx !== -1) {
-      this.data.externalConnections[idx] = {
-        ...this.data.externalConnections[idx],
-        ...connection,
-        // Ne jamais écraser les tokens chiffrés avec des valeurs vides
-        accessTokenEncrypted:
-          connection.accessTokenEncrypted || this.data.externalConnections[idx].accessTokenEncrypted,
-        refreshTokenEncrypted:
-          connection.refreshTokenEncrypted ?? this.data.externalConnections[idx].refreshTokenEncrypted,
-        updatedAt: new Date().toISOString(),
-      };
-    } else {
-      this.data.externalConnections.push(connection);
-    }
-    this.persist();
-    return connection;
+  async saveConnection(connection: ExternalConnection): Promise<ExternalConnection> {
+    return this.mutate((data) => {
+      const idx = data.externalConnections.findIndex(
+        (c) => c.userId === connection.userId && c.provider === connection.provider
+      );
+      if (idx !== -1) {
+        data.externalConnections[idx] = {
+          ...data.externalConnections[idx],
+          ...connection,
+          // Ne jamais écraser les tokens chiffrés avec des valeurs vides
+          accessTokenEncrypted:
+            connection.accessTokenEncrypted || data.externalConnections[idx].accessTokenEncrypted,
+          refreshTokenEncrypted:
+            connection.refreshTokenEncrypted ?? data.externalConnections[idx].refreshTokenEncrypted,
+          updatedAt: new Date().toISOString(),
+        };
+      } else {
+        data.externalConnections.push(connection);
+      }
+      return connection;
+    });
   }
 
-  deleteConnection(userId: string, provider: 'spotify' | 'apple_music'): boolean {
-    const initialLen = this.data.externalConnections.length;
-    this.data.externalConnections = this.data.externalConnections.filter(
-      (c) => !(c.userId === userId && c.provider === provider)
-    );
-    this.persist();
-    return this.data.externalConnections.length !== initialLen;
+  async deleteConnection(userId: string, provider: 'spotify' | 'apple_music'): Promise<boolean> {
+    return this.mutate((data) => {
+      const initialLen = data.externalConnections.length;
+      data.externalConnections = data.externalConnections.filter(
+        (c) => !(c.userId === userId && c.provider === provider)
+      );
+      return data.externalConnections.length !== initialLen;
+    });
   }
 
   // --- EXPORT JOBS ---
-  getExportJobsByUserId(userId: string): ExportJob[] {
-    return this.data.exportJobs.filter((j) => j.userId === userId);
+  async getExportJobsByUserId(userId: string): Promise<ExportJob[]> {
+    const data = await this.read();
+    return data.exportJobs.filter((j) => j.userId === userId);
   }
 
-  getExportJobById(id: string): ExportJob | undefined {
-    return this.data.exportJobs.find((j) => j.id === id);
+  async getExportJobById(id: string): Promise<ExportJob | undefined> {
+    const data = await this.read();
+    return data.exportJobs.find((j) => j.id === id);
   }
 
-  createExportJob(job: ExportJob): ExportJob {
-    this.data.exportJobs.unshift(job);
-    this.persist();
-    return job;
+  async createExportJob(job: ExportJob): Promise<ExportJob> {
+    return this.mutate((data) => {
+      data.exportJobs.unshift(job);
+      return job;
+    });
   }
 
-  updateExportJob(id: string, updates: Partial<ExportJob>): ExportJob | null {
-    const idx = this.data.exportJobs.findIndex((j) => j.id === id);
-    if (idx === -1) return null;
-    this.data.exportJobs[idx] = {
-      ...this.data.exportJobs[idx],
-      ...updates,
-    };
-    this.persist();
-    return this.data.exportJobs[idx];
+  async updateExportJob(id: string, updates: Partial<ExportJob>): Promise<ExportJob | null> {
+    return this.mutate((data) => {
+      const idx = data.exportJobs.findIndex((j) => j.id === id);
+      if (idx === -1) return null;
+      data.exportJobs[idx] = {
+        ...data.exportJobs[idx],
+        ...updates,
+      };
+      return data.exportJobs[idx];
+    });
   }
 
   // --- NOTIFICATIONS ---
-  getNotificationsByUserId(userId: string): Notification[] {
-    return this.data.notifications
+  async getNotificationsByUserId(userId: string): Promise<Notification[]> {
+    const data = await this.read();
+    return data.notifications
       .filter((n) => n.recipientId === userId)
       .map((n) => ({
         ...n,
-        actor: n.actorId ? publicAuthor(this.getUserById(n.actorId)) : undefined,
-        musicResource: n.musicResourceId ? this.getMusicResourceById(n.musicResourceId) : undefined,
+        actor: n.actorId ? publicAuthor(findUserById(data, n.actorId)) : undefined,
+        musicResource: n.musicResourceId ? findResourceById(data, n.musicResourceId) : undefined,
       }))
       .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
   }
 
-  createNotification(notif: Notification): Notification {
-    this.data.notifications.unshift(notif);
-    this.persist();
-    return notif;
-  }
-
-  markNotificationAsRead(id: string, userId: string): boolean {
-    const notif = this.data.notifications.find((n) => n.id === id && n.recipientId === userId);
-    if (notif) {
-      notif.isRead = true;
-      this.persist();
-      return true;
-    }
-    return false;
-  }
-
-  markAllNotificationsAsRead(userId: string): number {
-    let count = 0;
-    this.data.notifications.forEach((n) => {
-      if (n.recipientId === userId && !n.isRead) {
-        n.isRead = true;
-        count++;
-      }
+  async createNotification(notif: Notification): Promise<Notification> {
+    return this.mutate((data) => {
+      data.notifications.unshift(notif);
+      return notif;
     });
-    this.persist();
-    return count;
+  }
+
+  async markNotificationAsRead(id: string, userId: string): Promise<boolean> {
+    return this.mutate((data) => {
+      const notif = data.notifications.find((n) => n.id === id && n.recipientId === userId);
+      if (notif) {
+        notif.isRead = true;
+        return true;
+      }
+      return false;
+    });
+  }
+
+  async markAllNotificationsAsRead(userId: string): Promise<number> {
+    return this.mutate((data) => {
+      let count = 0;
+      data.notifications.forEach((n) => {
+        if (n.recipientId === userId && !n.isRead) {
+          n.isRead = true;
+          count++;
+        }
+      });
+      return count;
+    });
   }
 
   // --- REPORTS (MODERATION) ---
-  getReports(): Report[] {
-    return this.data.reports.map((r) => ({
+  async getReports(): Promise<Report[]> {
+    const data = await this.read();
+    return data.reports.map((r) => ({
       ...r,
-      reporter: publicAuthor(this.getUserById(r.reporterId)),
+      reporter: publicAuthor(findUserById(data, r.reporterId)),
     }));
   }
 
-  createReport(report: Report): Report {
-    this.data.reports.unshift(report);
-    this.persist();
-    return report;
+  async createReport(report: Report): Promise<Report> {
+    return this.mutate((data) => {
+      data.reports.unshift(report);
+      return report;
+    });
   }
 
-  updateReport(id: string, updates: Partial<Report>): Report | null {
-    const idx = this.data.reports.findIndex((r) => r.id === id);
-    if (idx === -1) return null;
-    this.data.reports[idx] = {
-      ...this.data.reports[idx],
-      ...updates,
-      updatedAt: new Date().toISOString(),
-    };
-    this.persist();
-    return this.data.reports[idx];
+  async updateReport(id: string, updates: Partial<Report>): Promise<Report | null> {
+    return this.mutate((data) => {
+      const idx = data.reports.findIndex((r) => r.id === id);
+      if (idx === -1) return null;
+      data.reports[idx] = {
+        ...data.reports[idx],
+        ...updates,
+        updatedAt: new Date().toISOString(),
+      };
+      return data.reports[idx];
+    });
   }
 
   // --- PLAYLIST CATEGORIES (manual curation, no auto-classification) ---
-  getPlaylistCategories(playlistId: string): PlaylistCategory[] {
-    return this.data.playlistCategories
+  async getPlaylistCategories(playlistId: string): Promise<PlaylistCategory[]> {
+    const data = await this.read();
+    return data.playlistCategories
       .filter((c) => c.playlistId === playlistId)
       .sort((a, b) => a.position - b.position);
   }
 
-  createPlaylistCategory(cat: PlaylistCategory): PlaylistCategory {
-    this.data.playlistCategories.push(cat);
-    this.persist();
-    return cat;
+  async createPlaylistCategory(cat: PlaylistCategory): Promise<PlaylistCategory> {
+    return this.mutate((data) => {
+      data.playlistCategories.push(cat);
+      return cat;
+    });
   }
 
-  updatePlaylistCategory(id: string, updates: Partial<PlaylistCategory>): PlaylistCategory | null {
-    const idx = this.data.playlistCategories.findIndex((c) => c.id === id);
-    if (idx === -1) return null;
-    this.data.playlistCategories[idx] = {
-      ...this.data.playlistCategories[idx],
-      ...updates,
-      updatedAt: new Date().toISOString(),
-    };
-    this.persist();
-    return this.data.playlistCategories[idx];
+  async updatePlaylistCategory(
+    id: string,
+    updates: Partial<PlaylistCategory>
+  ): Promise<PlaylistCategory | null> {
+    return this.mutate((data) => {
+      const idx = data.playlistCategories.findIndex((c) => c.id === id);
+      if (idx === -1) return null;
+      data.playlistCategories[idx] = {
+        ...data.playlistCategories[idx],
+        ...updates,
+        updatedAt: new Date().toISOString(),
+      };
+      return data.playlistCategories[idx];
+    });
   }
 
-  deletePlaylistCategory(id: string): boolean {
-    const cat = this.data.playlistCategories.find((c) => c.id === id);
-    if (!cat) return false;
-    // Unassign tracks (they become uncategorized, order preserved)
-    for (const r of this.data.musicResources) {
-      if (r.categoryId === id) r.categoryId = null;
-    }
-    for (const pl of this.data.musicResources) {
-      if (pl.type === "playlist" && Array.isArray((pl as any).tracks)) {
-        for (const t of (pl as any).tracks) {
-          if (t.categoryId === id) t.categoryId = null;
+  async deletePlaylistCategory(id: string): Promise<boolean> {
+    return this.mutate((data) => {
+      const cat = data.playlistCategories.find((c) => c.id === id);
+      if (!cat) return false;
+      // Unassign tracks (they become uncategorized, order preserved)
+      for (const r of data.musicResources) {
+        if (r.categoryId === id) r.categoryId = null;
+      }
+      for (const pl of data.musicResources) {
+        if (pl.type === "playlist" && Array.isArray((pl as any).tracks)) {
+          for (const t of (pl as any).tracks) {
+            if (t.categoryId === id) t.categoryId = null;
+          }
         }
       }
-    }
-    for (const e of this.data.trackEnrichments) {
-      if (e.categoryId === id) e.categoryId = null;
-    }
-    this.data.playlistCategories = this.data.playlistCategories.filter((c) => c.id !== id);
-    this.persist();
-    return true;
+      for (const e of data.trackEnrichments) {
+        if (e.categoryId === id) e.categoryId = null;
+      }
+      data.playlistCategories = data.playlistCategories.filter((c) => c.id !== id);
+      return true;
+    });
   }
 
   // --- EMOTIONAL CRITERIA (custom curves beyond mood & softness) ---
-  getEmotionalCriteria(playlistId: string): EmotionalCriterion[] {
-    return this.data.emotionalCriteria
+  async getEmotionalCriteria(playlistId: string): Promise<EmotionalCriterion[]> {
+    const data = await this.read();
+    return data.emotionalCriteria
       .filter((c) => c.playlistId === playlistId)
       .sort((a, b) => a.position - b.position);
   }
 
-  createEmotionalCriterion(criterion: EmotionalCriterion): EmotionalCriterion {
-    this.data.emotionalCriteria.push(criterion);
-    this.persist();
-    return criterion;
+  async createEmotionalCriterion(criterion: EmotionalCriterion): Promise<EmotionalCriterion> {
+    return this.mutate((data) => {
+      data.emotionalCriteria.push(criterion);
+      return criterion;
+    });
   }
 
-  updateEmotionalCriterion(
+  async updateEmotionalCriterion(
     id: string,
     updates: Partial<EmotionalCriterion>
-  ): EmotionalCriterion | null {
-    const idx = this.data.emotionalCriteria.findIndex((c) => c.id === id);
-    if (idx === -1) return null;
-    this.data.emotionalCriteria[idx] = {
-      ...this.data.emotionalCriteria[idx],
-      ...updates,
-      updatedAt: new Date().toISOString(),
-    };
-    this.persist();
-    return this.data.emotionalCriteria[idx];
+  ): Promise<EmotionalCriterion | null> {
+    return this.mutate((data) => {
+      const idx = data.emotionalCriteria.findIndex((c) => c.id === id);
+      if (idx === -1) return null;
+      data.emotionalCriteria[idx] = {
+        ...data.emotionalCriteria[idx],
+        ...updates,
+        updatedAt: new Date().toISOString(),
+      };
+      return data.emotionalCriteria[idx];
+    });
   }
 
-  deleteEmotionalCriterion(id: string): boolean {
-    const criterion = this.data.emotionalCriteria.find((c) => c.id === id);
-    if (!criterion) return false;
-    // Strip this criterion's scores everywhere.
-    for (const r of this.data.musicResources) {
-      if (r.customScores && id in r.customScores) delete r.customScores[id];
-    }
-    for (const pl of this.data.musicResources) {
-      if (pl.type === "playlist" && Array.isArray((pl as any).tracks)) {
-        for (const t of (pl as any).tracks as MusicResource[]) {
-          if (t.customScores && id in t.customScores) delete t.customScores[id];
+  async deleteEmotionalCriterion(id: string): Promise<boolean> {
+    return this.mutate((data) => {
+      const criterion = data.emotionalCriteria.find((c) => c.id === id);
+      if (!criterion) return false;
+      // Strip this criterion's scores everywhere.
+      for (const r of data.musicResources) {
+        if (r.customScores && id in r.customScores) delete r.customScores[id];
+      }
+      for (const pl of data.musicResources) {
+        if (pl.type === "playlist" && Array.isArray((pl as any).tracks)) {
+          for (const t of (pl as any).tracks as MusicResource[]) {
+            if (t.customScores && id in t.customScores) delete t.customScores[id];
+          }
         }
       }
-    }
-    for (const e of this.data.trackEnrichments) {
-      if (e.customScores && id in e.customScores) delete e.customScores[id];
-    }
-    this.data.emotionalCriteria = this.data.emotionalCriteria.filter((c) => c.id !== id);
-    this.persist();
-    return true;
+      for (const e of data.trackEnrichments) {
+        if (e.customScores && id in e.customScores) delete e.customScores[id];
+      }
+      data.emotionalCriteria = data.emotionalCriteria.filter((c) => c.id !== id);
+      return true;
+    });
   }
 
   // --- TRACK ENRICHMENT (manual metadata only) ---
-  getTrackEnrichment(resourceId: string): TrackEnrichment | undefined {
-    return this.data.trackEnrichments.find((e) => e.resourceId === resourceId);
+  async getTrackEnrichment(resourceId: string): Promise<TrackEnrichment | undefined> {
+    return findEnrichment(await this.read(), resourceId);
   }
 
-  upsertTrackEnrichment(
+  async upsertTrackEnrichment(
     resourceId: string,
     updates: Partial<Pick<TrackEnrichment, "categoryId" | "moodScore" | "softnessScore" | "customScores" | "tags" | "playlistId" | "sourcePosition">>
-  ): TrackEnrichment | null {
-    const resource = this.getMusicResourceById(resourceId);
-    // sourcePosition is immutable: refuse any attempt to change it
-    if (updates.sourcePosition !== undefined) {
-      const current = resource?.sourcePosition ?? this.getTrackEnrichment(resourceId)?.sourcePosition;
-      if (current !== undefined && updates.sourcePosition !== current) {
-        throw new Error("Track order follows the original playlist and cannot be changed.");
-      }
-    }
-    // Validate manual scores 0..100
-    for (const key of ["moodScore", "softnessScore"] as const) {
-      const v = (updates as any)[key];
-      if (v !== undefined && v !== null && (typeof v !== "number" || v < 0 || v > 100)) {
-        throw new Error(`${key} must be between 0 and 100.`);
-      }
-    }
-    const sanitizeCustom = (input: Record<string, number | null> | undefined): Record<string, number | null> | undefined => {
-      if (input === undefined) return undefined;
-      if (typeof input !== "object" || input === null || Array.isArray(input)) {
-        throw new Error("customScores must be an object of criterionId to 0..100.");
-      }
-      const out: Record<string, number | null> = {};
-      for (const [k, v] of Object.entries(input)) {
-        if (v === null) {
-          out[k] = null;
-        } else {
-          const n = Number(v);
-          if (!Number.isFinite(n)) throw new Error(`Custom score must be between 0 and 100.`);
-          out[k] = Math.max(0, Math.min(100, Math.round(n)));
+  ): Promise<TrackEnrichment | null> {
+    return this.mutate((data) => {
+      const resource = findResourceById(data, resourceId);
+      // sourcePosition is immutable: refuse any attempt to change it
+      if (updates.sourcePosition !== undefined) {
+        const current = resource?.sourcePosition ?? findEnrichment(data, resourceId)?.sourcePosition;
+        if (current !== undefined && updates.sourcePosition !== current) {
+          throw new Error("Track order follows the original playlist and cannot be changed.");
         }
       }
-      return out;
-    };
-    const customScores = sanitizeCustom(updates.customScores as Record<string, number | null> | undefined);
-    let e = this.data.trackEnrichments.find((x) => x.resourceId === resourceId);
-    if (!e) {
-      e = {
-        resourceId,
-        playlistId: updates.playlistId ?? resource?.playlistId,
-        sourcePosition: resource?.sourcePosition ?? 0,
-        categoryId: updates.categoryId ?? null,
-        moodScore: (updates.moodScore as number | null) ?? null,
-        softnessScore: (updates.softnessScore as number | null) ?? null,
-        customScores: customScores ?? {},
-        tags: updates.tags ?? [],
-        updatedAt: new Date().toISOString(),
-      };
-      this.data.trackEnrichments.push(e);
-    } else {
-      if (updates.categoryId !== undefined) e.categoryId = updates.categoryId;
-      if (updates.moodScore !== undefined) e.moodScore = updates.moodScore;
-      if (updates.softnessScore !== undefined) e.softnessScore = updates.softnessScore;
-      if (customScores !== undefined) e.customScores = { ...(e.customScores ?? {}), ...customScores };
-      if (updates.tags !== undefined) e.tags = updates.tags;
-      if (updates.playlistId !== undefined) e.playlistId = updates.playlistId;
-      e.updatedAt = new Date().toISOString();
-    }
-    // Mirror onto resource copies (top-level + embedded) — never touch sourcePosition
-    const mirror = (r: MusicResource) => {
-      if (updates.categoryId !== undefined) r.categoryId = updates.categoryId;
-      if (updates.moodScore !== undefined) r.moodScore = updates.moodScore;
-      if (updates.softnessScore !== undefined) r.softnessScore = updates.softnessScore;
-      if (customScores !== undefined) r.customScores = { ...(r.customScores ?? {}), ...customScores };
-      if (updates.tags !== undefined) r.tags = [...updates.tags];
-      r.updatedAt = new Date().toISOString();
-    };
-    if (resource) mirror(resource);
-    for (const pl of this.data.musicResources) {
-      if (pl.type === "playlist" && Array.isArray((pl as any).tracks)) {
-        const t = ((pl as any).tracks as MusicResource[]).find((x) => x.id === resourceId);
-        if (t) mirror(t);
+      // Validate manual scores 0..100
+      for (const key of ["moodScore", "softnessScore"] as const) {
+        const v = (updates as any)[key];
+        if (v !== undefined && v !== null && (typeof v !== "number" || v < 0 || v > 100)) {
+          throw new Error(`${key} must be between 0 and 100.`);
+        }
       }
-    }
-    this.persist();
-    return e;
+      const sanitizeCustom = (input: Record<string, number | null> | undefined): Record<string, number | null> | undefined => {
+        if (input === undefined) return undefined;
+        if (typeof input !== "object" || input === null || Array.isArray(input)) {
+          throw new Error("customScores must be an object of criterionId to 0..100.");
+        }
+        const out: Record<string, number | null> = {};
+        for (const [k, v] of Object.entries(input)) {
+          if (v === null) {
+            out[k] = null;
+          } else {
+            const n = Number(v);
+            if (!Number.isFinite(n)) throw new Error(`Custom score must be between 0 and 100.`);
+            out[k] = Math.max(0, Math.min(100, Math.round(n)));
+          }
+        }
+        return out;
+      };
+      const customScores = sanitizeCustom(updates.customScores as Record<string, number | null> | undefined);
+      let e = data.trackEnrichments.find((x) => x.resourceId === resourceId);
+      if (!e) {
+        e = {
+          resourceId,
+          playlistId: updates.playlistId ?? resource?.playlistId,
+          sourcePosition: resource?.sourcePosition ?? 0,
+          categoryId: updates.categoryId ?? null,
+          moodScore: (updates.moodScore as number | null) ?? null,
+          softnessScore: (updates.softnessScore as number | null) ?? null,
+          customScores: customScores ?? {},
+          tags: updates.tags ?? [],
+          updatedAt: new Date().toISOString(),
+        };
+        data.trackEnrichments.push(e);
+      } else {
+        if (updates.categoryId !== undefined) e.categoryId = updates.categoryId;
+        if (updates.moodScore !== undefined) e.moodScore = updates.moodScore;
+        if (updates.softnessScore !== undefined) e.softnessScore = updates.softnessScore;
+        if (customScores !== undefined) e.customScores = { ...(e.customScores ?? {}), ...customScores };
+        if (updates.tags !== undefined) e.tags = updates.tags;
+        if (updates.playlistId !== undefined) e.playlistId = updates.playlistId;
+        e.updatedAt = new Date().toISOString();
+      }
+      // Mirror onto resource copies (top-level + embedded) — never touch sourcePosition
+      const mirror = (r: MusicResource) => {
+        if (updates.categoryId !== undefined) r.categoryId = updates.categoryId;
+        if (updates.moodScore !== undefined) r.moodScore = updates.moodScore;
+        if (updates.softnessScore !== undefined) r.softnessScore = updates.softnessScore;
+        if (customScores !== undefined) r.customScores = { ...(r.customScores ?? {}), ...customScores };
+        if (updates.tags !== undefined) r.tags = [...updates.tags];
+        r.updatedAt = new Date().toISOString();
+      };
+      if (resource) mirror(resource);
+      for (const pl of data.musicResources) {
+        if (pl.type === "playlist" && Array.isArray((pl as any).tracks)) {
+          const t = ((pl as any).tracks as MusicResource[]).find((x) => x.id === resourceId);
+          if (t) mirror(t);
+        }
+      }
+      return e;
+    });
   }
 
   /** Playlist + tracks enriched, tracks ALWAYS sorted by sourcePosition. */
-  getCuratedPlaylist(playlistId: string): { playlist: MusicResource; categories: PlaylistCategory[]; tracks: MusicResource[] } | null {
-    const playlist = this.getMusicResourceById(playlistId);
+  async getCuratedPlaylist(
+    playlistId: string
+  ): Promise<{ playlist: MusicResource; categories: PlaylistCategory[]; tracks: MusicResource[] } | null> {
+    const data = await this.read();
+    const playlist = findResourceById(data, playlistId);
     if (!playlist || playlist.type !== "playlist") return null;
-    const categories = this.getPlaylistCategories(playlistId);
+    const categories = data.playlistCategories
+      .filter((c) => c.playlistId === playlistId)
+      .sort((a, b) => a.position - b.position);
     let tracks: MusicResource[] = [];
     if (Array.isArray(playlist.tracks) && playlist.tracks.length > 0) {
       tracks = [...playlist.tracks];
     } else {
-      tracks = this.data.musicResources.filter((r) => r.type === "track" && r.playlistId === playlistId);
+      tracks = data.musicResources.filter((r) => r.type === "track" && r.playlistId === playlistId);
       // Fallback: standalone tracks carry enrichment
       tracks = tracks.map((t) => {
-        const e = this.getTrackEnrichment(t.id);
+        const e = findEnrichment(data, t.id);
         return e
           ? { ...t, sourcePosition: e.sourcePosition, categoryId: e.categoryId, moodScore: e.moodScore, softnessScore: e.softnessScore, customScores: { ...(e.customScores ?? {}), ...(t.customScores ?? {}) }, tags: e.tags }
           : t;
@@ -972,7 +1277,7 @@ class MelomaniaDatabase {
     }
     // Enrich embedded copies from enrichment table
     tracks = tracks.map((t) => {
-      const e = this.getTrackEnrichment(t.id);
+      const e = findEnrichment(data, t.id);
       if (e) {
         return {
           ...t,
@@ -992,96 +1297,101 @@ class MelomaniaDatabase {
   }
 
   // --- TRACK NOTES (immutable initial editorial note + replies) ---
-  getTrackNotes(trackId: string): TrackNote[] {
-    const all = this.data.trackNotes.filter((n) => n.trackId === trackId && !n.deletedAt);
+  async getTrackNotes(trackId: string): Promise<TrackNote[]> {
+    const data = await this.read();
+    const all = data.trackNotes.filter((n) => n.trackId === trackId && !n.deletedAt);
     const roots = all.filter((n) => !n.parentNoteId);
     const replies = all.filter((n) => !!n.parentNoteId);
     return roots
-      .map((r) => this.hydrateTrackNote(r, replies))
+      .map((r) => hydrateTrackNote(data, r, replies))
       .sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
   }
 
-  getTrackInitialNote(trackId: string): TrackNote | undefined {
-    const roots = this.data.trackNotes.filter((n) => n.trackId === trackId && !n.parentNoteId && !n.deletedAt);
+  async getTrackInitialNote(trackId: string): Promise<TrackNote | undefined> {
+    const data = await this.read();
+    const roots = data.trackNotes.filter((n) => n.trackId === trackId && !n.parentNoteId && !n.deletedAt);
     if (roots.length === 0) return undefined;
     const sorted = [...roots].sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
-    return this.hydrateTrackNote(sorted[0], this.data.trackNotes);
+    return hydrateTrackNote(data, sorted[0], data.trackNotes);
   }
 
-  createTrackNote(note: TrackNote): TrackNote {
-    // Only ONE initial note per track: further top-level attempts become replies is handled by API
-    this.data.trackNotes.push(note);
-    this.persist();
-    return this.hydrateTrackNote(note, []);
+  async createTrackNote(note: TrackNote): Promise<TrackNote> {
+    return this.mutate((data) => {
+      // Only ONE initial note per track: further top-level attempts become replies is handled by API
+      data.trackNotes.push(note);
+      return hydrateTrackNote(data, note, []);
+    });
   }
 
-  updateTrackNote(id: string, updates: Partial<TrackNote>, requesterId: string): TrackNote | null {
-    const idx = this.data.trackNotes.findIndex((n) => n.id === id);
-    if (idx === -1) return null;
-    const existing = this.data.trackNotes[idx];
-    // Initial note: set in stone once published — no edits by anyone (author included)
-    if (existing.isInitial && existing.isLocked) {
-      throw new Error("The opening editorial note cannot be edited or deleted.");
-    }
-    this.data.trackNotes[idx] = {
-      ...existing,
-      ...updates,
-      id: existing.id,
-      trackId: existing.trackId,
-      isInitial: existing.isInitial,
-      isLocked: existing.isLocked,
-      isEdited: true,
-      updatedAt: new Date().toISOString(),
-    };
-    this.persist();
-    return this.hydrateTrackNote(this.data.trackNotes[idx], []);
+  async updateTrackNote(
+    id: string,
+    updates: Partial<TrackNote>,
+    requesterId: string
+  ): Promise<TrackNote | null> {
+    void requesterId;
+    return this.mutate((data) => {
+      const idx = data.trackNotes.findIndex((n) => n.id === id);
+      if (idx === -1) return null;
+      const existing = data.trackNotes[idx];
+      // Initial note: set in stone once published — no edits by anyone (author included)
+      if (existing.isInitial && existing.isLocked) {
+        throw new Error("The opening editorial note cannot be edited or deleted.");
+      }
+      data.trackNotes[idx] = {
+        ...existing,
+        ...updates,
+        id: existing.id,
+        trackId: existing.trackId,
+        isInitial: existing.isInitial,
+        isLocked: existing.isLocked,
+        isEdited: true,
+        updatedAt: new Date().toISOString(),
+      };
+      return hydrateTrackNote(data, data.trackNotes[idx], []);
+    });
   }
 
-  deleteTrackNote(id: string): boolean {
-    const note = this.data.trackNotes.find((n) => n.id === id);
-    if (!note) return false;
-    if (note.isInitial && note.isLocked) {
-      throw new Error("The opening editorial note cannot be edited or deleted.");
-    }
-    note.deletedAt = new Date().toISOString();
-    this.persist();
-    return true;
-  }
-
-  private hydrateTrackNote(note: TrackNote, allReplies: TrackNote[]): TrackNote {
-    const replies = allReplies
-      .filter((r) => r.parentNoteId === note.id && !r.deletedAt)
-      .map((r) => this.hydrateTrackNote(r, []))
-      .sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
-    const mentions = this.data.mentions.filter((m) => m.commentId === note.id);
-    return { ...note, author: publicAuthor(this.getUserById(note.authorId)), mentions, replies: replies.length > 0 ? replies : undefined };
+  async deleteTrackNote(id: string): Promise<boolean> {
+    return this.mutate((data) => {
+      const note = data.trackNotes.find((n) => n.id === id);
+      if (!note) return false;
+      if (note.isInitial && note.isLocked) {
+        throw new Error("The opening editorial note cannot be edited or deleted.");
+      }
+      note.deletedAt = new Date().toISOString();
+      return true;
+    });
   }
 
   // --- GAP COMMENTS (between two consecutive tracks) ---
-  getGapComments(playlistId: string): GapComment[] {
-    return this.data.gapComments
+  async getGapComments(playlistId: string): Promise<GapComment[]> {
+    const data = await this.read();
+    return data.gapComments
       .filter((g) => g.playlistId === playlistId)
-      .map((g) => ({ ...g, author: publicAuthor(this.getUserById(g.authorId)) }))
+      .map((g) => ({ ...g, author: publicAuthor(findUserById(data, g.authorId)) }))
       .sort((a, b) => a.afterSourcePosition - b.afterSourcePosition);
   }
 
-  createGapComment(gap: GapComment): GapComment {
-    this.data.gapComments.push(gap);
-    this.persist();
-    return { ...gap, author: publicAuthor(this.getUserById(gap.authorId)) };
+  async createGapComment(gap: GapComment): Promise<GapComment> {
+    return this.mutate((data) => {
+      data.gapComments.push(gap);
+      return { ...gap, author: publicAuthor(findUserById(data, gap.authorId)) };
+    });
   }
 
-  deleteGapComment(id: string): boolean {
-    const initialLen = this.data.gapComments.length;
-    this.data.gapComments = this.data.gapComments.filter((g) => g.id !== id);
-    this.persist();
-    return this.data.gapComments.length !== initialLen;
+  async deleteGapComment(id: string): Promise<boolean> {
+    return this.mutate((data) => {
+      const initialLen = data.gapComments.length;
+      data.gapComments = data.gapComments.filter((g) => g.id !== id);
+      return data.gapComments.length !== initialLen;
+    });
   }
 
   /** Share that published a playlist resource (for ownership checks). */
-  getShareByResourceId(resourceId: string): MusicShare | undefined {
-    const share = this.data.musicShares.find((s) => s.resourceId === resourceId);
-    return share ? this.hydrateShare(share) : undefined;
+  async getShareByResourceId(resourceId: string): Promise<MusicShare | undefined> {
+    const data = await this.read();
+    const share = data.musicShares.find((s) => s.resourceId === resourceId);
+    return share ? hydrateShare(data, share) : undefined;
   }
 }
 

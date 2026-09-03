@@ -11,7 +11,7 @@ export async function GET(
   { params }: { params: Promise<{ id: string }> }
 ) {
   const { id } = await params;
-  const notes = db.getTrackNotes(id);
+  const notes = await db.getTrackNotes(id);
   return NextResponse.json({ notes, initial: notes.find((n) => n.isInitial) ?? null });
 }
 
@@ -22,7 +22,7 @@ export async function POST(
   const user = await getSessionUser();
   if (!user) return NextResponse.json({ error: "You must be signed in." }, { status: 401 });
   const { id: trackId } = await params;
-  const track = db.getMusicResourceById(trackId);
+  const track = await db.getMusicResourceById(trackId);
   if (!track) return NextResponse.json({ error: "Track not found." }, { status: 404 });
 
   try {
@@ -33,7 +33,7 @@ export async function POST(
     }
 
     const now = new Date().toISOString();
-    const existingInitial = db.getTrackInitialNote(trackId);
+    const existingInitial = await db.getTrackInitialNote(trackId);
 
     // Initial editorial note: single, immutable once published
     if (!parentNoteId) {
@@ -58,13 +58,14 @@ export async function POST(
         createdAt: now,
         updatedAt: now,
       };
-      const saved = db.createTrackNote(note);
-      parseMentions(String(textBody), saved.id, user.id);
+      const saved = await db.createTrackNote(note);
+      await parseMentions(String(textBody), saved.id, user.id);
       return NextResponse.json({ note: saved }, { status: 201 });
     }
 
     // Reply
-    const parentList = db.getTrackNotes(trackId).flatMap((n) => [n, ...(n.replies ?? [])]);
+    const allNotes = await db.getTrackNotes(trackId);
+    const parentList = allNotes.flatMap((n) => [n, ...(n.replies ?? [])]);
     const parentFound = parentList.find((n) => n.id === parentNoteId);
     if (!parentFound) return NextResponse.json({ error: "Parent note not found." }, { status: 404 });
 
@@ -83,12 +84,12 @@ export async function POST(
       createdAt: now,
       updatedAt: now,
     };
-    const savedReply = db.createTrackNote(reply);
-    parseMentions(String(textBody), savedReply.id, user.id);
+    const savedReply = await db.createTrackNote(reply);
+    await parseMentions(String(textBody), savedReply.id, user.id);
 
     // Notify initial note author on reply
     if (parentFound.authorId !== user.id) {
-      db.createNotification({
+      await db.createNotification({
         id: `notif_${Date.now()}_${Math.random().toString(36).slice(2, 4)}`,
         recipientId: parentFound.authorId,
         actorId: user.id,
@@ -105,11 +106,11 @@ export async function POST(
   }
 }
 
-function parseMentions(text: string, noteId: string, authorId: string) {
+async function parseMentions(text: string, noteId: string, authorId: string) {
   const now = new Date().toISOString();
   const matches = Array.from(text.matchAll(/@([a-zA-Z0-9_-]+)/g)) as RegExpExecArray[];
   for (const m of matches) {
-    const targetUser = db.getUserByUsername(m[1]);
+    const targetUser = await db.getUserByUsername(m[1]);
     if (targetUser && targetUser.id !== authorId) {
       const mention: Mention = {
         id: `men_${Date.now()}_${Math.random().toString(36).slice(2, 4)}`,
@@ -121,7 +122,7 @@ function parseMentions(text: string, noteId: string, authorId: string) {
         rawText: m[0],
         createdAt: now,
       };
-      db.createMention(mention);
+      await db.createMention(mention);
     }
   }
 }
