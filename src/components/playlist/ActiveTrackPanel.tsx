@@ -57,13 +57,14 @@ export function ActiveTrackPanel({ track, playlistId, categories, criteria = [] 
   return (
     <div className="space-y-4" aria-label={`Now playing: ${track.title}`}>
       <div className="overflow-hidden rounded-2xl border border-border bg-black/50">
-        {/* Media: cover art, or the clip when opened */}
-        <div className="relative w-full bg-white/5">
+        {/* Media: cover art, or the clip when opened. The clip box never
+            exceeds the card width — the YouTube embed fills 100% x 100%. */}
+        <div className="relative w-full max-w-full overflow-hidden bg-white/5">
           <div
-            className={videoOpen ? "aspect-video w-full" : "h-0 w-full overflow-hidden opacity-0"}
+            className={videoOpen ? "w-full max-w-full" : "h-0 w-full overflow-hidden opacity-0"}
             aria-hidden={!videoOpen}
           >
-            <YouTubeVideo showHeader={false} />
+            <YouTubeVideo showHeader={false} className="w-full max-w-full" />
           </div>
           {!videoOpen && (
             <div className="relative aspect-square w-full">

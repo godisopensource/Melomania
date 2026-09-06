@@ -6,6 +6,8 @@ import { GapComment } from "@/types";
 import { formatRelativeDate } from "@/lib/utils";
 import { cn } from "@/lib/utils";
 import { gapAriaLabel, gapEdgeDetail, gapShortLabel, isIntroGap, isOutroGap } from "@/lib/gap-comments";
+import { usePlayer } from "../providers/PlayerProvider";
+import { renderRichBody } from "../comments/rich-text";
 
 interface GapCommentBubbleProps {
   gap: GapComment;
@@ -21,6 +23,7 @@ interface GapCommentBubbleProps {
  * opens the full note in a dialog (portal — never clipped by the shelves).
  */
 export function GapCommentBubble({ gap, isOwner, onDeleted, trackCount = 0 }: GapCommentBubbleProps) {
+  const { seekTo } = usePlayer();
   const [open, setOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
 
@@ -88,7 +91,7 @@ export function GapCommentBubble({ gap, isOwner, onDeleted, trackCount = 0 }: Ga
                 </button>
               </Dialog.Close>
             </div>
-            <p className="whitespace-pre-wrap text-sm leading-relaxed text-foreground/95">{gap.body}</p>
+            <p className="whitespace-pre-wrap text-sm leading-relaxed text-foreground/95">{renderRichBody(gap.body, seekTo)}</p>
             <div className="mt-3 flex items-center justify-between border-t border-border/60 pt-2">
               <span className="text-[11px] text-muted-foreground">
                 {gap.author?.displayName || "Curator"} · {formatRelativeDate(gap.createdAt)}

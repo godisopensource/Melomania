@@ -298,6 +298,7 @@ export async function POST(req: NextRequest) {
         role: "member",
         joinedAt: now,
       });
+      const resourceWord = playlistId ? "playlist" : "track";
       await db.createNotification({
         id: `notif_${Date.now()}_${rand()}`,
         recipientId: invited.id,
@@ -307,7 +308,7 @@ export async function POST(req: NextRequest) {
         shareId,
         musicResourceId: resourceId,
         isRead: false,
-        message: `${user.displayName} shared a private track with you: ${threadTitle}`,
+        message: `${user.displayName} shared a private ${resourceWord} with you: ${threadTitle}`,
         createdAt: now,
       });
     }

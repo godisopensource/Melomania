@@ -5,7 +5,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { requirePlaylistOwner } from "@/lib/playlist-auth";
-import { GapComment } from "@/types";
+import { GapComment, Mention } from "@/types";
 import { INTRO_GAP_POSITION } from "@/lib/gap-comments";
 
 export async function GET(
@@ -55,8 +55,70 @@ export async function POST(
       updatedAt: now,
     };
     const saved = await db.createGapComment(gap);
+
+    // @user mentions notify, like in discussions and track threads.
+    await notifyMentionedUsers({
+      text: String(text),
+      gapId: saved.id,
+      playlistId,
+      actorId: check.user.id,
+      actorDisplayName: check.user.displayName,
+      slotLabel: isIntro ? "the intro" : isOutro ? "the conclusion" : "a comment",
+    });
+
     return NextResponse.json({ gapComment: saved }, { status: 201 });
   } catch {
     return NextResponse.json({ error: "Error saving comment." }, { status: 500 });
+  }
+}
+
+/**
+ * Parse @username mentions and notify each mentioned user (once, never
+ * self). The notification links to the playlist workspace via musicResourceId.
+ */
+async function notifyMentionedUsers(args: {
+  text: string;
+  gapId: string;
+  playlistId: string;
+  actorId: string;
+  actorDisplayName: string;
+  slotLabel: string;
+}): Promise<void> {
+  try {
+    const now = new Date().toISOString();
+    const playlist = await db.getMusicResourceById(args.playlistId);
+    const where = playlist ? `${args.slotLabel} of “${playlist.title}”` : args.slotLabel;
+    const matches = Array.from(args.text.matchAll(/@([a-zA-Z0-9_-]+)/g)) as RegExpExecArray[];
+    const notified = new Set<string>();
+    for (const m of matches) {
+      const targetUser = await db.getUserByUsername(m[1]);
+      if (!targetUser || targetUser.id === args.actorId || notified.has(targetUser.id)) {
+        continue;
+      }
+      notified.add(targetUser.id);
+      const mention: Mention = {
+        id: `men_${Date.now()}_${Math.random().toString(36).slice(2, 4)}`,
+        commentId: args.gapId,
+        mentionType: "user",
+        targetUserId: targetUser.id,
+        startOffset: m.index || 0,
+        endOffset: (m.index || 0) + m[0].length,
+        rawText: m[0],
+        createdAt: now,
+      };
+      await db.createMention(mention);
+      await db.createNotification({
+        id: `notif_${Date.now()}_${Math.random().toString(36).slice(2, 4)}`,
+        recipientId: targetUser.id,
+        actorId: args.actorId,
+        type: "user_mention",
+        musicResourceId: args.playlistId,
+        isRead: false,
+        message: `${args.actorDisplayName} mentioned you in ${where}`,
+        createdAt: now,
+      });
+    }
+  } catch {
+    // Mention notifications are best-effort — the comment itself is saved.
   }
 }

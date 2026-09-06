@@ -125,7 +125,7 @@ export function Sidebar() {
               {topTags.map(({ tag, count }) => (
                 <Link
                   key={tag}
-                  href={`/?tag=${encodeURIComponent(tag)}`}
+                  href={`/tag/${encodeURIComponent(tag)}`}
                   className="inline-flex items-center gap-1 rounded-md border border-border bg-white/5 px-2.5 py-1 text-[11px] font-medium text-muted-foreground hover:border-brand-500/40 hover:text-brand-320 transition-colors"
                 >
                   <TagIcon className="h-3 w-3" aria-hidden="true" />

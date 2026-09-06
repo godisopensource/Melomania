@@ -97,8 +97,11 @@ export function ShareCard({ share, onDeleted }: ShareCardProps) {
 
   const handleCopyShareLink = () => {
     if (typeof window === "undefined") return;
-    const shareUrl = `${window.location.origin}/share/${share.id}`;
-    navigator.clipboard.writeText(shareUrl);
+    // Playlists are shared via their workspace URL — never /share.
+    const url = isPlaylist
+      ? `${window.location.origin}/playlists/${resource.id}`
+      : `${window.location.origin}/share/${share.id}`;
+    navigator.clipboard.writeText(url);
     setCopiedLink(true);
     setTimeout(() => setCopiedLink(false), 2000);
   };
@@ -228,12 +231,13 @@ export function ShareCard({ share, onDeleted }: ShareCardProps) {
         {share.tags && share.tags.length > 0 && (
           <div className="mt-3 flex flex-wrap gap-1">
             {share.tags.map((tag) => (
-              <span
+              <Link
                 key={tag}
-                className="rounded bg-white/5 px-2 py-0.5 text-[10px] font-medium text-muted-foreground"
+                href={`/tag/${encodeURIComponent(tag.toLowerCase().replace(/^#/, ""))}`}
+                className="rounded bg-white/5 px-2 py-0.5 text-[10px] font-medium text-muted-foreground hover:bg-brand-500/20 hover:text-brand-320 transition-colors"
               >
-                #{tag}
-              </span>
+                #{tag.replace(/^#/, "")}
+              </Link>
             ))}
           </div>
         )}
@@ -256,17 +260,17 @@ export function ShareCard({ share, onDeleted }: ShareCardProps) {
             </button>
 
             <Link
-              href={`/share/${share.id}`}
+              href={isPlaylist ? `/playlists/${resource.id}` : `/share/${share.id}`}
               className="flex items-center gap-1.5 rounded bg-white/5 px-2.5 py-1 text-xs font-medium text-muted-foreground hover:bg-white/10 hover:text-foreground transition-colors"
             >
               <MessageSquare className="h-3.5 w-3.5" />
-              <span>Discussion & notes</span>
+              <span>{isPlaylist ? "Open playlist" : "Discussion & notes"}</span>
             </Link>
 
             <button
               onClick={handleCopyShareLink}
               className="flex items-center gap-1.5 rounded bg-white/5 px-2.5 py-1 text-xs font-medium text-muted-foreground hover:bg-white/10 hover:text-foreground transition-colors"
-              title="Copy share link"
+              title={isPlaylist ? "Copy playlist link" : "Copy share link"}
             >
               {copiedLink ? (
                 <>
@@ -276,7 +280,7 @@ export function ShareCard({ share, onDeleted }: ShareCardProps) {
               ) : (
                 <>
                   <Share2 className="h-3.5 w-3.5" />
-                  <span>Share link</span>
+                  <span>{isPlaylist ? "Playlist link" : "Share link"}</span>
                 </>
               )}
             </button>

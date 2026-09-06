@@ -269,6 +269,7 @@ export default function PlaylistsPage() {
                       ) : (
                         <PlaylistPrivacyManager
                           shareId={entry.shareId}
+                          playlistId={pl.id}
                           initialVisibility={entry.visibility}
                           initialAllowedUsers={allowedUsers[entry.shareId] || []}
                           playlistTitle={pl.title}

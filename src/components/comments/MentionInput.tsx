@@ -3,7 +3,7 @@
 import React, { useState, useEffect, useRef } from "react";
 import { User, MusicResource } from "@/types";
 import { formatTime, parseTimeToSeconds } from "@/lib/utils";
-import { User as UserIcon, Music, Disc, ListMusic, Clock } from "lucide-react";
+import { User as UserIcon, Music, Disc, ListMusic, Clock, Tag as TagIcon } from "lucide-react";
 
 const formatTimecode = (s: number) => formatTime(s);
 
@@ -14,6 +14,7 @@ interface MentionInputProps {
   className?: string;
   onKeyDown?: (e: React.KeyboardEvent<HTMLTextAreaElement>) => void;
   autoFocus?: boolean;
+  maxLength?: number;
   /** TrackNoteThread mode: expose un bouton d'insertion de timecode cliquable. */
   enableTimecodes?: boolean;
   currentTime?: number;
@@ -22,24 +23,28 @@ interface MentionInputProps {
 export function MentionInput({
   value,
   onChange,
-  placeholder = "Write a note... Type @ to mention a user or a track",
+  placeholder = "Write a note... Type @ to mention, # to tag",
   className = "",
   onKeyDown,
   autoFocus = false,
+  maxLength,
   enableTimecodes = false,
   currentTime = 0,
 }: MentionInputProps) {
   const [showMenu, setShowMenu] = useState(false);
+  const [trigger, setTrigger] = useState<"@" | "#" | null>(null);
   const [mentionQuery, setMentionQuery] = useState("");
+  const [tagQuery, setTagQuery] = useState("");
   const [users, setUsers] = useState<User[]>([]);
   const [tracks, setTracks] = useState<MusicResource[]>([]);
   const [playlists, setPlaylists] = useState<MusicResource[]>([]);
+  const [topTags, setTopTags] = useState<{ tag: string; count: number }[]>([]);
   const [selectedIndex, setSelectedIndex] = useState(0);
 
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
-    if (!showMenu) return;
+    if (!showMenu || trigger !== "@") return;
 
     const fetchMatches = async () => {
       try {
@@ -56,7 +61,28 @@ export function MentionInput({
     };
 
     fetchMatches();
-  }, [mentionQuery, showMenu]);
+  }, [mentionQuery, showMenu, trigger]);
+
+  // #tags: top tags, filtered client-side (empty query = most used).
+  useEffect(() => {
+    if (!showMenu || trigger !== "#") return;
+    let cancelled = false;
+    const fetchTags = async () => {
+      try {
+        const res = await fetch(`/api/tags?limit=30`);
+        if (res.ok) {
+          const data = await res.json();
+          if (!cancelled) setTopTags(data.tags || []);
+        }
+      } catch (err) {
+        console.error("Tag search error:", err);
+      }
+    };
+    fetchTags();
+    return () => {
+      cancelled = true;
+    };
+  }, [showMenu, trigger]);
 
   const handleTextChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
     let text = e.target.value;
@@ -85,11 +111,23 @@ export function MentionInput({
 
     const textBeforeCursor = text.slice(0, cursor);
     const lastAtPos = textBeforeCursor.lastIndexOf("@");
+    const lastHashPos = textBeforeCursor.lastIndexOf("#");
 
-    if (lastAtPos !== -1) {
+    // Dual trigger: the closest of @ / # before the cursor wins.
+    if (lastAtPos > lastHashPos) {
       const query = textBeforeCursor.slice(lastAtPos + 1);
-      if (!query.includes(" ") && query.length < 20) {
+      if (!query.includes(" ") && !query.includes("#") && query.length < 20) {
+        setTrigger("@");
         setMentionQuery(query);
+        setShowMenu(true);
+        setSelectedIndex(0);
+        return;
+      }
+    } else if (lastHashPos !== -1) {
+      const query = textBeforeCursor.slice(lastHashPos + 1);
+      if (!query.includes(" ") && !query.includes("@") && !query.includes("[") && query.length < 40) {
+        setTrigger("#");
+        setTagQuery(query);
         setShowMenu(true);
         setSelectedIndex(0);
         return;
@@ -97,25 +135,34 @@ export function MentionInput({
     }
 
     setShowMenu(false);
+    setTrigger(null);
   };
 
-  const handleSelectMention = (item: { label: string; value: string; type: "user" | "track" | "playlist" | "timecode" }) => {
+  type MentionItem =
+    | { label: string; value: string; type: "user" | "track" | "playlist" | "timecode" }
+    | { label: string; value: string; type: "tag" };
+
+  const handleSelectMention = (item: MentionItem) => {
     if (!textareaRef.current) return;
     const cursor = textareaRef.current.selectionStart;
     const textBeforeCursor = value.slice(0, cursor);
     const textAfterCursor = value.slice(cursor);
-    const lastAtPos = textBeforeCursor.lastIndexOf("@");
+    const triggerChar = item.type === "tag" ? "#" : "@";
+    const lastPos = textBeforeCursor.lastIndexOf(triggerChar);
 
-    if (lastAtPos !== -1) {
+    if (lastPos !== -1) {
       // @1:32 inserts a clickable timecode badge [1:32], like the existing feature.
-      const replacement = item.type === "timecode" ? `${item.value} ` : `@${item.value} `;
-      const newText = textBeforeCursor.slice(0, lastAtPos) + replacement + textAfterCursor;
+      // #tag inserts a clickable tag badge linking to the feed filter.
+      const replacement =
+        item.type === "timecode" ? `${item.value} ` : `${triggerChar}${item.value} `;
+      const newText = textBeforeCursor.slice(0, lastPos) + replacement + textAfterCursor;
       onChange(newText);
       setShowMenu(false);
+      setTrigger(null);
 
       setTimeout(() => {
         if (textareaRef.current) {
-          const newCursorPos = lastAtPos + replacement.length;
+          const newCursorPos = lastPos + replacement.length;
           textareaRef.current.focus();
           textareaRef.current.setSelectionRange(newCursorPos, newCursorPos);
         }
@@ -124,7 +171,9 @@ export function MentionInput({
   };
 
   // @1:32 → clickable timecode badge (same rendering as [1:32]).
-  const timecodeMatch = mentionQuery.match(/^(\d{1,3}):([0-5]?\d)(?::([0-5]?\d))?$/);
+  const timecodeMatch =
+    trigger === "@" ? mentionQuery.match(/^(\d{1,3}):([0-5]?\d)(?::([0-5]?\d))?$/)
+    : null;
   const timecodeOption = timecodeMatch
     ? [
         {
@@ -138,7 +187,7 @@ export function MentionInput({
       ]
     : [];
 
-  const allOptions = [
+  const mentionOptions = [
     ...timecodeOption,
     ...users.map((u) => ({
       id: u.id,
@@ -165,6 +214,41 @@ export function MentionInput({
       avatar: p.coverImageUrl,
     })),
   ];
+
+  // #tag options: filter top tags by query; offer free use when no exact match.
+  const qLower = tagQuery.trim().toLowerCase().replace(/^#/, "");
+  const matchingTags = topTags.filter((t) =>
+    qLower ? t.tag.toLowerCase().includes(qLower) : true
+  );
+  const hasExactTag = qLower
+    ? topTags.some((t) => t.tag.toLowerCase() === qLower)
+    : true;
+  const tagOptions = [
+    ...(qLower && !hasExactTag
+      ? [
+          {
+            id: `new_${qLower}`,
+            label: `#${qLower}`,
+            sublabel: "Use this tag",
+            value: qLower,
+            type: "tag" as const,
+            avatar: undefined as string | undefined,
+            count: undefined as number | undefined,
+          },
+        ]
+      : []),
+    ...matchingTags.slice(0, 8).map((t) => ({
+      id: t.tag,
+      label: `#${t.tag}`,
+      sublabel: t.count === 1 ? "1 share" : `${t.count} shares`,
+      value: t.tag,
+      type: "tag" as const,
+      avatar: undefined as string | undefined,
+      count: t.count,
+    })),
+  ];
+
+  const allOptions = trigger === "#" ? tagOptions : mentionOptions;
 
   const handleKeyDownInternal = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (showMenu && allOptions.length > 0) {
@@ -206,6 +290,7 @@ export function MentionInput({
         onKeyDown={handleKeyDownInternal}
         placeholder={placeholder}
         autoFocus={autoFocus}
+        maxLength={maxLength}
         aria-label={placeholder}
         className={`w-full resize-none rounded-xl border border-border bg-black/40 p-3 text-xs text-foreground placeholder:text-muted-foreground focus:border-brand-500 focus:outline-none focus:ring-1 focus:ring-brand-500 ${className}`}
         rows={3}
@@ -229,7 +314,7 @@ export function MentionInput({
       {showMenu && allOptions.length > 0 && (
         <div className="absolute bottom-full left-0 mb-2 w-72 max-h-60 overflow-y-auto rounded-xl border border-border bg-popover/95 p-1.5 shadow-xl backdrop-blur-md z-50 animate-in fade-in">
           <div className="px-2 py-1 text-xs font-semibold text-muted-foreground">
-            Mentions (@)
+            {trigger === "#" ? "Tags (#)" : "Mentions (@)"}
           </div>
           <div className="space-y-0.5">
             {allOptions.map((opt, idx) => (
@@ -243,6 +328,8 @@ export function MentionInput({
               >
                 {opt.type === "timecode" ? (
                   <Clock className="h-4 w-4 shrink-0 text-brand-320" aria-hidden="true" />
+                ) : opt.type === "tag" ? (
+                  <TagIcon className="h-4 w-4 shrink-0 text-brand-320" aria-hidden="true" />
                 ) : opt.avatar ? (
                   <img src={opt.avatar} alt="" className="h-5 w-5 rounded-full object-cover" />
                 ) : (

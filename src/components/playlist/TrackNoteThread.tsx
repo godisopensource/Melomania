@@ -16,7 +16,7 @@ interface TrackNoteThreadProps {
 
 /**
  * Track discussion thread: one opening note + replies
- * (user/track mentions, timecodes). Adapts CommentSection/MentionInput.
+ * (user/track mentions, #tags, timecodes). Adapts CommentSection/MentionInput.
  */
 export function TrackNoteThread({ track }: TrackNoteThreadProps) {
   const { user, openAuthModal } = useAuth();
@@ -176,7 +176,7 @@ export function TrackNoteThread({ track }: TrackNoteThreadProps) {
               <p className="text-[11px] text-muted-foreground">
                 One opening note per track. Once published it stays as is — no edits, no deletion.
               </p>
-              <MentionInput value={draft} onChange={setDraft} placeholder="Your take on this track… @ to mention someone" />
+              <MentionInput value={draft} onChange={setDraft} placeholder="Your take on this track… @ to mention, # to tag" />
               <div className="flex justify-end">
                 <button
                   type="submit"

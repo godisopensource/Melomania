@@ -96,6 +96,10 @@ export function YouTubeVideo({
     try {
       playerRef.current = new window.YT.Player(playerId, {
         videoId: activeVideoId,
+        // Fill the parent box instead of the fixed 640x360 default,
+        // so the embed never overflows a narrow Now Playing column.
+        width: "100%",
+        height: "100%",
         playerVars: {
           autoplay: isPlaying ? 1 : 0,
           controls: 1,
@@ -165,7 +169,7 @@ export function YouTubeVideo({
 
   if (!activeVideoId) {
     return (
-      <div className={className}>
+      <div className={`w-full max-w-full overflow-hidden ${className}`}>
         {showHeader && (
           <div className="flex items-center gap-2 border-b border-border bg-black/20 px-4 py-2.5">
             <span className="flex h-2 w-2 shrink-0 rounded-full bg-white/20" aria-hidden="true" />
@@ -178,7 +182,7 @@ export function YouTubeVideo({
   }
 
   return (
-    <div className={className}>
+    <div className={`w-full max-w-full ${className}`}>
       {showHeader && (
         <div className="flex items-center justify-between border-b border-border bg-black/20">
           <button
@@ -215,12 +219,19 @@ export function YouTubeVideo({
         </div>
       )}
 
-      {/* Collapsed = audio only (kept mounted, hidden). */}
+      {/* Collapsed = audio only (kept mounted, hidden). The embed always
+          fills its parent width: aspect-video when visible, so the YouTube
+          iframe (forced to 100% x 100% below) can never overflow the card. */}
       <div
-        className={`relative w-full bg-black/90 ${expanded || !showHeader ? "" : "h-0 overflow-hidden opacity-0"} ${!showHeader ? "h-full" : expanded ? "aspect-video" : ""}`}
+        className={`yt-embed relative w-full max-w-full overflow-hidden bg-black/90 ${
+          expanded || !showHeader ? "aspect-video" : "h-0 opacity-0"
+        }`}
         aria-hidden={showHeader && !expanded}
       >
-        <div ref={iframeContainerRef} className="h-full w-full" />
+        <div
+          ref={iframeContainerRef}
+          className="absolute inset-0 h-full w-full max-w-full [&_iframe]:h-full [&_iframe]:w-full [&_iframe]:max-w-full"
+        />
       </div>
     </div>
   );

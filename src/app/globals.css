@@ -176,6 +176,23 @@
   }
 }
 
+/* YouTube embed: the IFrame API injects an iframe with fixed inline
+   width/height (640x390) — force it to fill its responsive parent
+   (Now Playing panel, sheets, share page) instead of overflowing. */
+.yt-embed {
+  position: relative;
+  overflow: hidden;
+  max-width: 100%;
+}
+.yt-embed iframe {
+  position: absolute !important;
+  inset: 0 !important;
+  width: 100% !important;
+  height: 100% !important;
+  max-width: 100% !important;
+  border: 0;
+}
+
 /* Dark range slider (crate zoom) */
 input[type="range"].melo-range {
   -webkit-appearance: none;

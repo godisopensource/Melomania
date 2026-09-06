@@ -1710,8 +1710,7 @@ class MelomaniaDatabase {
   // --- TRACK NOTES (immutable initial editorial note + replies) ---
   async getTrackNotes(trackId: string): Promise<TrackNote[]> {
     const data = await this.read();
-    const all = data.trackNotes.filter((n) => n.trackId === trackId && !n.deletedAt);
-    const roots = all.filter((n) => !n.parentNoteId);
+    const all = data.trackNotes.filter((n) => n.trackId === trackId && !n.deletedAt);    const roots = all.filter((n) => !n.parentNoteId);
     const replies = all.filter((n) => !!n.parentNoteId);
     return roots
       .map((r) => hydrateTrackNote(data, r, replies))
@@ -1724,6 +1723,14 @@ class MelomaniaDatabase {
     if (roots.length === 0) return undefined;
     const sorted = [...roots].sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
     return hydrateTrackNote(data, sorted[0], data.trackNotes);
+  }
+
+  /** Every non-deleted track note (for tag aggregation — filter visibility at the call site). */
+  async getAllTrackNotes(): Promise<TrackNote[]> {
+    const data = await this.read();
+    const all = data.trackNotes.filter((n) => !n.deletedAt);
+    const replies = all.filter((n) => !!n.parentNoteId);
+    return all.map((n) => hydrateTrackNote(data, n, replies));
   }
 
   async createTrackNote(note: TrackNote): Promise<TrackNote> {
@@ -1783,6 +1790,15 @@ class MelomaniaDatabase {
       .sort((a, b) => a.afterSourcePosition - b.afterSourcePosition);
   }
 
+  /** Every gap comment (for tag aggregation — filter visibility at the call site). */
+  async getAllGapComments(): Promise<GapComment[]> {
+    const data = await this.read();
+    return data.gapComments.map((g) => ({
+      ...g,
+      author: publicAuthor(findUserById(data, g.authorId)),
+    }));
+  }
+
   async createGapComment(gap: GapComment): Promise<GapComment> {
     return this.mutate((data) => {
       data.gapComments.push(gap);
@@ -1803,6 +1819,14 @@ class MelomaniaDatabase {
     const data = await this.read();
     const share = data.musicShares.find((s) => s.resourceId === resourceId);
     return share ? hydrateShare(data, share) : undefined;
+  }
+
+  /** Every share pointing at a resource (a playlist can be shared several times). */
+  async getSharesByResourceId(resourceId: string): Promise<MusicShare[]> {
+    const data = await this.read();
+    return data.musicShares
+      .filter((s) => s.resourceId === resourceId)
+      .map((s) => hydrateShare(data, s));
   }
 }
 

@@ -11,7 +11,7 @@ interface TrackReplyComposerProps {
   onPosted: () => void;
 }
 
-/** Thread reply: @ mentions + timecodes supported. */
+/** Thread reply: @ mentions, #tags + timecodes supported. */
 export function TrackReplyComposer({ trackId, parentNoteId, onPosted }: TrackReplyComposerProps) {
   const { currentTime } = usePlayer();
   const [body, setBody] = useState("");
@@ -62,7 +62,7 @@ export function TrackReplyComposer({ trackId, parentNoteId, onPosted }: TrackRep
           {pinTime ? `Pinned at ${formatTime(currentTime)}` : "Pin to current time"}
         </button>
       </div>
-      <MentionInput value={body} onChange={setBody} placeholder="Reply… @ to mention, @1:32 for a clickable timecode" />
+      <MentionInput value={body} onChange={setBody} placeholder="Reply… @ to mention, # to tag, @1:32 for a clickable timecode" />
       {error && (
         <p role="alert" className="text-[11px] text-destructive-foreground">
           {error}

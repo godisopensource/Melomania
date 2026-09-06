@@ -2,6 +2,7 @@
 import React, { useState } from "react";
 import { Send, Loader2, X } from "lucide-react";
 import { INTRO_GAP_POSITION } from "@/lib/gap-comments";
+import { MentionInput } from "../comments/MentionInput";
 
 interface GapCommentComposerProps {
   playlistId: string;
@@ -13,8 +14,7 @@ interface GapCommentComposerProps {
 }
 
 /** Creator-only inline composer for a comment between two tracks, or as playlist intro / conclusion. */
-export function GapCommentComposer({ playlistId, afterSourcePosition, trackCount = 0, onPosted, onCancel }: GapCommentComposerProps) {
-  const [body, setBody] = useState("");
+export function GapCommentComposer({ playlistId, afterSourcePosition, trackCount = 0, onPosted, onCancel }: GapCommentComposerProps) {  const [body, setBody] = useState("");
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const intro = afterSourcePosition === INTRO_GAP_POSITION;
@@ -75,15 +75,18 @@ export function GapCommentComposer({ playlistId, afterSourcePosition, trackCount
           <X className="h-3.5 w-3.5" />
         </button>
       </div>
-      <textarea
+      <MentionInput
         value={body}
-        onChange={(e) => setBody(e.target.value)}
-        placeholder={placeholder}
+        onChange={setBody}
+        placeholder={`${placeholder} (@ to mention, # to tag)`}
         maxLength={1000}
-        rows={2}
         autoFocus
-        className="melo-focus-ring w-full resize-none rounded-lg border border-border bg-black/50 p-2.5 text-xs text-foreground placeholder:text-muted-foreground"
       />
+      <p className="mt-1 text-[10px] text-muted-foreground">
+        Type <span className="font-mono text-[#e8b34b]">@</span> to mention someone,{" "}
+        <span className="font-mono text-[#e8b34b]">#</span> to tag,{" "}
+        <span className="font-mono text-[#e8b34b]">[m:ss]</span> for a clickable timecode
+      </p>
       {error && (
         <p role="alert" className="mt-1 text-[11px] text-destructive-foreground">
           {error}

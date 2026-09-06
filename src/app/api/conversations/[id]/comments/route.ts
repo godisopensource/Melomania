@@ -72,6 +72,8 @@ export async function POST(
 
     const savedComment = await db.createComment(comment);
 
+    const alreadyNotified = new Set<string>();
+
     // Parse Mentions (@username)
     const mentionMatches = Array.from(textBody.matchAll(/@([a-zA-Z0-9_-]+)/g)) as RegExpExecArray[];
     for (const match of mentionMatches) {
@@ -101,6 +103,7 @@ export async function POST(
           message: `${user.displayName} mentioned you in a comment`,
           createdAt: now,
         });
+        alreadyNotified.add(targetUser.id);
       }
     }
 
@@ -118,8 +121,53 @@ export async function POST(
           message: `${user.displayName} replied to your comment`,
           createdAt: now,
         });
+        alreadyNotified.add(parent.authorId);
       }
     }
+
+    // Notify everyone else involved in the shared context (playlist/share
+    // audience + conversation participants) so activity is never silent.
+    try {
+      const { notifyShareAudience } = await import("@/lib/share-notifications");
+      const share = thread.shareId
+        ? await db.getMusicShareById(thread.shareId)
+        : undefined;
+      if (share) {
+        const title = thread.title || share.resource?.title || "a shared playlist";
+        await notifyShareAudience({
+          share,
+          actorId: user.id,
+          actorDisplayName: user.displayName,
+          type: "share_comment",
+          message: parentCommentId
+            ? `${user.displayName} replied in “${title}”`
+            : `${user.displayName} commented on “${title}”`,
+          conversationId,
+          commentId,
+          musicResourceId: share.resourceId,
+          excludeUserIds: alreadyNotified,
+        });
+      } else {
+        // Standalone conversation: notify fellow participants.
+        const participants = await db.getParticipantsByConversationId(conversationId);
+        for (const p of participants) {
+          if (p.userId === user.id || alreadyNotified.has(p.userId)) continue;
+          await db.createNotification({
+            id: `notif_${Date.now()}_${Math.random().toString(36).substr(2, 4)}`,
+            recipientId: p.userId,
+            actorId: user.id,
+            type: "share_comment",
+            conversationId,
+            commentId,
+            isRead: false,
+            message: parentCommentId
+              ? `${user.displayName} replied in “${thread.title || "a conversation"}”`
+              : `${user.displayName} commented on “${thread.title || "a conversation"}”`,
+            createdAt: now,
+          });
+        }
+      }
+    } catch {}
 
     return NextResponse.json({ comment: savedComment });
   } catch (err: any) {

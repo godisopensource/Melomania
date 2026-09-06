@@ -480,7 +480,7 @@ export function PlaylistWorkspace({ playlistId }: PlaylistWorkspaceProps) {
               className="melo-focus-ring inline-flex items-center gap-1.5 rounded-lg border border-border bg-white/5 px-3 py-2 text-[11px] font-bold text-muted-foreground hover:text-foreground"
             >
               <Settings2 className="h-3.5 w-3.5" aria-hidden="true" />
-              {showPrivacy ? "Close privacy" : "Privacy"}
+              Privacy
             </button>
           )}
           {isOwner && (
@@ -510,43 +510,64 @@ export function PlaylistWorkspace({ playlistId }: PlaylistWorkspaceProps) {
         </div>
       </div>
 
-      {isOwner && share && showPrivacy && (
-        <section
-          aria-label="Playlist privacy and sharing"
-          className="max-w-xl rounded-2xl border border-border bg-card/50 p-4"
-        >
-          <h2 className="mb-1 text-sm font-bold text-foreground">Privacy & sharing</h2>
-          <p className="mb-3 text-[11px] text-muted-foreground">
-            Private = only you. Shared = private + guests you invite. Public = everyone.
-          </p>
-          <PlaylistPrivacyManager
-            shareId={share.id}
-            initialVisibility={share.visibility}
-            initialAllowedUsers={shareGuests}
-            playlistTitle={playlist?.title}
-            onChanged={(updated) => {
-              setShare((prev) =>
-                prev
-                  ? {
-                      ...prev,
-                      visibility: updated.visibility as "public" | "private",
-                      allowedUserIds: updated.allowedUserIds ?? prev.allowedUserIds,
-                    }
-                  : prev
-              );
-              if (updated.allowedUserIds && updated.allowedUserIds.length === 0) {
-                setShareGuests([]);
-              }
-            }}
-            onGuestsChanged={(guests) => {
-              setShareGuests(guests);
-              setShare((prev) =>
-                prev ? { ...prev, allowedUserIds: guests.map((g) => g.id) } : prev
-              );
-            }}
-            onDeleted={() => router.push("/playlists")}
-          />
-        </section>
+      {isOwner && share && (
+        <Dialog.Root open={showPrivacy} onOpenChange={setShowPrivacy}>
+          <Dialog.Portal>
+            <Dialog.Overlay className="fixed inset-0 z-40 bg-black/70 backdrop-blur-sm" />
+            <Dialog.Content
+              className="fixed left-1/2 top-1/2 z-50 max-h-[88vh] w-[calc(100vw-2rem)] max-w-lg -translate-x-1/2 -translate-y-1/2 overflow-y-auto rounded-2xl border border-border bg-[#121010] p-4"
+              aria-label="Playlist privacy and sharing"
+            >
+              <div className="mb-3 flex items-center justify-between">
+                <div>
+                  <Dialog.Title className="text-sm font-bold text-foreground">
+                    Privacy & sharing
+                  </Dialog.Title>
+                  <Dialog.Description className="mt-0.5 text-[11px] text-muted-foreground">
+                    Private = only you. Shared = private + guests you invite. Public = everyone.
+                  </Dialog.Description>
+                </div>
+                <Dialog.Close asChild>
+                  <button
+                    type="button"
+                    className="melo-focus-ring shrink-0 rounded-lg border border-border bg-white/5 p-2 text-muted-foreground hover:text-foreground"
+                    aria-label="Close privacy settings"
+                  >
+                    <X className="h-4 w-4" />
+                  </button>
+                </Dialog.Close>
+              </div>
+              <PlaylistPrivacyManager
+                shareId={share.id}
+                playlistId={playlistId}
+                initialVisibility={share.visibility}
+                initialAllowedUsers={shareGuests}
+                playlistTitle={playlist?.title}
+                onChanged={(updated) => {
+                  setShare((prev) =>
+                    prev
+                      ? {
+                          ...prev,
+                          visibility: updated.visibility as "public" | "private",
+                          allowedUserIds: updated.allowedUserIds ?? prev.allowedUserIds,
+                        }
+                      : prev
+                  );
+                  if (updated.allowedUserIds && updated.allowedUserIds.length === 0) {
+                    setShareGuests([]);
+                  }
+                }}
+                onGuestsChanged={(guests) => {
+                  setShareGuests(guests);
+                  setShare((prev) =>
+                    prev ? { ...prev, allowedUserIds: guests.map((g) => g.id) } : prev
+                  );
+                }}
+                onDeleted={() => router.push("/playlists")}
+              />
+            </Dialog.Content>
+          </Dialog.Portal>
+        </Dialog.Root>
       )}
 
       {syncMsg && (

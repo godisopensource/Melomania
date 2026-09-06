@@ -153,7 +153,7 @@ export function CommentSection({
     }
   };
 
-  // Shared rich text: @ mentions + clickable [m:ss] timecode badges.
+  // Shared rich text: @ mentions, #tag badges + clickable [m:ss] timecode badges.
   const renderCommentBody = (text: string) => renderRichBody(text, seekTo);
 
   const renderCommentItem = (item: Comment, isReply = false) => {
@@ -344,12 +344,13 @@ export function CommentSection({
           <MentionInput
             value={newCommentText}
             onChange={setNewCommentText}
-            placeholder="Share your thoughts, use @ to mention someone or a track..."
+            placeholder="Share your thoughts, use @ to mention, # to tag..."
           />
 
           <div className="flex items-center justify-between pt-1">
             <span className="text-[11px] text-muted-foreground">
-              Type <span className="font-mono text-brand-320">@</span> to autocomplete users or tracks
+              Type <span className="font-mono text-brand-320">@</span> to autocomplete users or tracks,{" "}
+              <span className="font-mono text-brand-320">#</span> for tags
             </span>
 
             <button

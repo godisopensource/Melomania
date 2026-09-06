@@ -19,6 +19,8 @@ export type NotificationType =
   | 'conversation_invitation'
   | 'share_like'
   | 'share_invitation'
+  | 'share_comment'
+  | 'track_comment'
   | 'export_completed'
   | 'export_warning'
   | 'import_error';

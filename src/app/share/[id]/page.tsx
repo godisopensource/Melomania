@@ -66,6 +66,12 @@ export default function ShareDetailPage({
       }
       if (res.ok) {
         const data = await res.json();
+        // Playlists live in their dedicated workspace: redirect legacy
+        // /share/:id links (old notifications, bookmarks, copied links).
+        if (data.share?.resource?.type === "playlist" && data.share.resource?.id) {
+          router.replace(`/playlists/${data.share.resource.id}`);
+          return;
+        }
         setShare(data.share);
         setThread(data.thread);
         setComments(data.comments || []);

@@ -1,6 +1,6 @@
 "use client";
 // PlaylistPrivacyManager — owner-only privacy + delete control, reused by
-// /playlists (card) and /playlists/[id] (detail section).
+// /playlists (card) and /playlists/[id] (detail dialog).
 //
 // Privacy model (server: visibility public|private + allowedUserIds):
 // - "private" → visibility=private, no guests
@@ -8,7 +8,17 @@
 // - "public"  → visibility=public (guest list preserved server-side)
 
 import React, { useState } from "react";
-import { Lock, Users, Globe, Loader2, X, UserPlus, Trash2 } from "lucide-react";
+import {
+  Lock,
+  Users,
+  Globe,
+  Loader2,
+  X,
+  UserPlus,
+  Trash2,
+  Link2,
+  Check,
+} from "lucide-react";
 
 export type PrivacyMode = "private" | "shared" | "public";
 
@@ -21,6 +31,8 @@ export interface AllowedUser {
 
 interface PlaylistPrivacyManagerProps {
   shareId: string;
+  /** Playlist resource id — used to build the /playlists/:id link. Falls back to the share URL. */
+  playlistId?: string;
   initialVisibility: "public" | "private";
   initialAllowedUsers: AllowedUser[];
   playlistTitle?: string;
@@ -44,7 +56,7 @@ export function PlaylistPrivacyBadge({
   const mode = privacyModeOf(visibility, guestCount);
   if (mode === "public") {
     return (
-      <span className="inline-flex items-center gap-1 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2 py-0.5 text-[10px] font-semibold text-emerald-300">
+      <span className="inline-flex items-center gap-1 rounded-full border border-brand-500/40 bg-brand-500/10 px-2 py-0.5 text-[10px] font-semibold text-brand-320">
         <Globe className="h-3 w-3" aria-hidden="true" />
         Public
       </span>
@@ -52,7 +64,7 @@ export function PlaylistPrivacyBadge({
   }
   if (mode === "shared") {
     return (
-      <span className="inline-flex items-center gap-1 rounded-full border border-sky-500/30 bg-sky-500/10 px-2 py-0.5 text-[10px] font-semibold text-sky-300">
+      <span className="inline-flex items-center gap-1 rounded-full border border-border bg-white/5 px-2 py-0.5 text-[10px] font-semibold text-muted-foreground">
         <Users className="h-3 w-3" aria-hidden="true" />
         Shared · {guestCount}
       </span>
@@ -87,8 +99,15 @@ const MODES: { key: PrivacyMode; label: string; hint: string; icon: React.ReactN
   },
 ];
 
+const MODE_STATUS: Record<PrivacyMode, string> = {
+  private: "Only you can see this playlist — invite someone to share it privately.",
+  shared: "Only you and the invited guests can see this playlist.",
+  public: "Everyone can see this playlist. The invited list below is kept for later.",
+};
+
 export function PlaylistPrivacyManager({
   shareId,
+  playlistId,
   initialVisibility,
   initialAllowedUsers,
   playlistTitle,
@@ -98,13 +117,19 @@ export function PlaylistPrivacyManager({
 }: PlaylistPrivacyManagerProps) {
   const [visibility, setVisibility] = useState(initialVisibility);
   const [allowedUsers, setAllowedUsers] = useState<AllowedUser[]>(initialAllowedUsers);
+  // Explicit tab selection: "shared" is a real tab even with zero guests
+  // (server mode would otherwise collapse back to "private" and the tab
+  // would look unselectable).
+  const [selected, setSelected] = useState<PrivacyMode | null>(null);
   const [inviteInput, setInviteInput] = useState("");
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [copied, setCopied] = useState(false);
 
-  const mode = privacyModeOf(visibility, allowedUsers.length);
+  const serverMode = privacyModeOf(visibility, allowedUsers.length);
+  const mode = selected ?? serverMode;
 
   const patchShare = async (action: string, payload: Record<string, unknown>) => {
     const res = await fetch(`/api/shares/${shareId}`, {
@@ -131,6 +156,7 @@ export function PlaylistPrivacyManager({
       if (next === "public") {
         const share = await patchShare("set_visibility", { visibility: "public" });
         applyShare(share);
+        setSelected(null);
       } else if (next === "private") {
         // Pure private: visibility back to private + remove every guest.
         const share = await patchShare("set_visibility", { visibility: "private" });
@@ -144,10 +170,13 @@ export function PlaylistPrivacyManager({
         setAllowedUsers([]);
         applyShare({ ...share, allowedUserIds: [] });
         onGuestsChanged?.([]);
+        setSelected(null);
       } else {
-        // Shared = private visibility, guest list managed below.
+        // Shared = private visibility, guest list managed below. The tab
+        // stays selected even with zero guests so the invite box is visible.
         const share = await patchShare("set_visibility", { visibility: "private" });
         applyShare(share);
+        setSelected("shared");
       }
     } catch (e: any) {
       setError(e.message);
@@ -171,6 +200,8 @@ export function PlaylistPrivacyManager({
         onGuestsChanged?.(detail.allowedUsers);
       }
       setInviteInput("");
+      // Server truth now carries the mode (guests > 0 → shared).
+      setSelected(null);
       applyShare(share);
     } catch (err: any) {
       setError(err.message);
@@ -185,17 +216,28 @@ export function PlaylistPrivacyManager({
     setError(null);
     try {
       const share = await patchShare("uninvite", { userId });
-      setAllowedUsers((prev) => {
-        const next = prev.filter((u) => u.id !== userId);
-        onGuestsChanged?.(next);
-        return next;
-      });
+      const next = allowedUsers.filter((u) => u.id !== userId);
+      setAllowedUsers(next);
+      onGuestsChanged?.(next);
+      // Keep the Shared tab open when the last guest leaves, so the
+      // invite box stays visible instead of collapsing to Private.
+      setSelected(next.length === 0 ? "shared" : null);
       applyShare(share);
     } catch (e: any) {
       setError(e.message);
     } finally {
       setBusy(null);
     }
+  };
+
+  const handleCopyPlaylistLink = () => {
+    if (typeof window === "undefined") return;
+    const url = playlistId
+      ? `${window.location.origin}/playlists/${playlistId}`
+      : `${window.location.origin}/share/${shareId}`;
+    navigator.clipboard.writeText(url);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
   };
 
   const handleDelete = async () => {
@@ -250,7 +292,32 @@ export function PlaylistPrivacyManager({
         })}
       </div>
 
-      {/* Guest management (shared mode, or private-with-guests legacy) */}
+      <p className="text-[11px] text-muted-foreground">
+        {mode === "shared" && allowedUsers.length > 0
+          ? `Only you and ${allowedUsers.length} guest${allowedUsers.length > 1 ? "s" : ""} (${allowedUsers.map((g) => `@${g.username}`).join(", ")}) can see this playlist.`
+          : MODE_STATUS[mode]}
+      </p>
+
+      {/* Copy playlist link */}
+      <button
+        type="button"
+        onClick={handleCopyPlaylistLink}
+        className="melo-focus-ring flex w-full items-center justify-center gap-1.5 rounded-xl border border-dashed border-border px-3 py-2 text-[11px] font-bold text-muted-foreground transition-colors hover:border-brand-500/50 hover:text-foreground"
+      >
+        {copied ? (
+          <>
+            <Check className="h-3.5 w-3.5 text-emerald-400" aria-hidden="true" />
+            <span className="text-emerald-400">Playlist link copied!</span>
+          </>
+        ) : (
+          <>
+            <Link2 className="h-3.5 w-3.5" aria-hidden="true" />
+            Copy playlist link
+          </>
+        )}
+      </button>
+
+      {/* Guest management (shared tab, or private-with-guests legacy) */}
       {(mode === "shared" || (mode === "private" && allowedUsers.length > 0)) && (
         <div className="space-y-2 rounded-xl border border-border bg-black/30 p-2.5">
           <form onSubmit={handleInvite} className="flex gap-1.5">
@@ -265,7 +332,7 @@ export function PlaylistPrivacyManager({
             <button
               type="submit"
               disabled={busy === "invite" || !inviteInput.trim()}
-              className="melo-focus-ring inline-flex shrink-0 items-center gap-1 rounded-lg bg-white/10 px-2.5 py-1.5 text-xs font-bold text-foreground hover:bg-white/20 disabled:opacity-40"
+              className="melo-focus-ring inline-flex shrink-0 items-center gap-1 rounded-lg bg-brand-500 px-2.5 py-1.5 text-xs font-bold text-white hover:bg-brand-590 disabled:opacity-40"
             >
               {busy === "invite" ? (
                 <Loader2 className="h-3.5 w-3.5 animate-spin" />

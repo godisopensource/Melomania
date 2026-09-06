@@ -68,6 +68,14 @@ export function Navbar() {
   }, [searchQuery]);
 
   const notifHref = (notif: Notification): string | null => {
+    // Playlists always open in their dedicated workspace — never /share.
+    const resource = (notif as any).musicResource;
+    const resourceId = (notif as any).musicResourceId as string | undefined;
+    const looksLikePlaylist =
+      resource?.type === "playlist" ||
+      resourceId?.startsWith("res_pl_") ||
+      notif.message?.includes("Playlist:");
+    if (looksLikePlaylist && resourceId) return `/playlists/${resourceId}`;
     if (notif.shareId) return `/share/${notif.shareId}`;
     return null;
   };
@@ -82,6 +90,22 @@ export function Navbar() {
       setNotifications((prev) => prev.map((n) => (n.id === notif.id ? { ...n, isRead: true } : n)));
       setUnreadCount((c) => Math.max(0, c - (notif.isRead ? 0 : 1)));
     } catch {}
+    // Resolve the freshest target: a playlist invitation opens /playlists/:id
+    // even if the notification payload wasn't hydrated with the resource type.
+    if (notif.shareId) {
+      try {
+        const res = await fetch(`/api/shares/${notif.shareId}`);
+        if (res.ok) {
+          const data = await res.json();
+          const resource = data.share?.resource;
+          if (resource?.type === "playlist" && resource?.id) {
+            setNotifOpen(false);
+            router.push(`/playlists/${resource.id}`);
+            return;
+          }
+        }
+      } catch {}
+    }
     const href = notifHref(notif);
     if (href) {
       setNotifOpen(false);
@@ -144,23 +168,45 @@ export function Navbar() {
                 </button>
               </div>
 
+              {searchResults.playlists?.length > 0 && (
+                <div className="mb-3">
+                  <span className="text-xs font-semibold text-brand-410">Playlists</span>
+                  <div className="mt-1 space-y-1">
+                    {searchResults.playlists.map((p: any) => (
+                      <Link
+                        key={p.id}
+                        href={`/playlists/${p.id}`}
+                        onClick={() => setSearchOpen(false)}
+                        className="flex items-center gap-2.5 rounded-lg p-1.5 hover:bg-white/5 text-xs text-foreground"
+                      >
+                        <img src={p.coverImageUrl} alt="" className="h-7 w-7 rounded object-cover" />
+                        <div className="truncate">
+                          <p className="font-semibold truncate">{p.title}</p>
+                          <p className="text-[11px] text-muted-foreground">
+                            {p.trackCount ?? p.tracks?.length ?? 0} tracks
+                          </p>
+                        </div>
+                      </Link>
+                    ))}
+                  </div>
+                </div>
+              )}
+
               {searchResults.tracks?.length > 0 && (
                 <div className="mb-3">
                   <span className="text-xs font-semibold text-brand-410">Tracks</span>
                   <div className="mt-1 space-y-1">
                     {searchResults.tracks.map((t) => (
-                      <Link
+                      <div
                         key={t.id}
-                        href={`/share/${t.id.replace("res_", "share_")}`}
-                        onClick={() => setSearchOpen(false)}
-                        className="flex items-center gap-2.5 rounded-lg p-1.5 hover:bg-white/5 text-xs text-foreground"
+                        className="flex items-center gap-2.5 rounded-lg p-1.5 text-xs text-foreground"
                       >
                         <img src={t.coverImageUrl} alt="" className="h-7 w-7 rounded object-cover" />
                         <div className="truncate">
                           <p className="font-semibold truncate">{t.title}</p>
                           <p className="text-[11px] text-muted-foreground">{t.artistName}</p>
                         </div>
-                      </Link>
+                      </div>
                     ))}
                   </div>
                 </div>
@@ -258,6 +304,13 @@ export function Navbar() {
                       })
                     )}
                   </div>
+                  <Link
+                    href="/notifications"
+                    onClick={() => setNotifOpen(false)}
+                    className="mt-2 block rounded-lg bg-white/5 p-2 text-center text-xs font-semibold text-brand-410 hover:bg-white/10 hover:underline transition-colors"
+                  >
+                    View all recent notifications
+                  </Link>
                 </div>
               )}
             </div>
