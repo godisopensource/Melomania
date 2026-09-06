@@ -1,6 +1,7 @@
 "use client";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
+import { useRouter } from "next/navigation";
 import {
   Loader2,
   AlertTriangle,
@@ -14,11 +15,17 @@ import {
   RefreshCw,
   ZoomIn,
   ZoomOut,
+  Settings2,
 } from "lucide-react";
 import { GapComment, MusicResource, PlaylistCategory, PlaylistViewMode, EmotionalCriterion } from "@/types";
 import { usePlayer } from "../providers/PlayerProvider";
 import { YouTubePlayer } from "../player/YouTubePlayer";
 import { PlaylistViewToggle } from "./PlaylistViewToggle";
+import {
+  PlaylistPrivacyManager,
+  PlaylistPrivacyBadge,
+  AllowedUser,
+} from "./PlaylistPrivacyManager";
 import { CurveLegend, CurveLegendItem } from "./CurveLegend";
 import { EditorialCurveLayer } from "./EditorialCurveLayer";
 import { CuratorFlow } from "./CuratorFlow";
@@ -36,6 +43,7 @@ interface PlaylistWorkspaceProps {
 const MAP_ZOOMS = [1, 1.5, 2, 3, 4];
 
 export function PlaylistWorkspace({ playlistId }: PlaylistWorkspaceProps) {
+  const router = useRouter();
   const { currentTrack, isPlaying, playQueue, pause, resume } = usePlayer();
   const [mode, setMode] = useState<PlaylistViewMode>("curator");
   const [playlist, setPlaylist] = useState<MusicResource | null>(null);
@@ -44,6 +52,9 @@ export function PlaylistWorkspace({ playlistId }: PlaylistWorkspaceProps) {
   const [tracks, setTracks] = useState<MusicResource[]>([]);
   const [gapComments, setGapComments] = useState<GapComment[]>([]);
   const [isOwner, setIsOwner] = useState(false);
+  const [share, setShare] = useState<{ id: string; visibility: "public" | "private"; allowedUserIds: string[] } | null>(null);
+  const [shareGuests, setShareGuests] = useState<AllowedUser[]>([]);
+  const [showPrivacy, setShowPrivacy] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -95,6 +106,8 @@ export function PlaylistWorkspace({ playlistId }: PlaylistWorkspaceProps) {
         setTracks(data.tracks || []);
         setGapComments(data.gapComments || []);
         setIsOwner(!!data.isOwner);
+        setShare(data.share ?? null);
+        setShareGuests(data.allowedUsers || []);
         // New curves default to visible; keep existing toggles.
         setVisibleCurves((prev) => {
           const next = { ...prev };
@@ -439,8 +452,16 @@ export function PlaylistWorkspace({ playlistId }: PlaylistWorkspaceProps) {
       {/* Editorial header */}
       <div className="mb-5 flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
         <div className="min-w-0">
-          <p className="font-mono text-[11px] uppercase tracking-[0.2em] text-brand-320">
-            Playlist · {tracks.length} tracks
+          <p className="flex flex-wrap items-center gap-2 font-mono text-[11px] uppercase tracking-[0.2em] text-brand-320">
+            <span>
+              Playlist · {tracks.length} tracks
+            </span>
+            {share && (
+              <PlaylistPrivacyBadge
+                visibility={share.visibility}
+                guestCount={shareGuests.length}
+              />
+            )}
           </p>
           <h1 className="font-display mt-1 truncate text-3xl font-bold tracking-tight text-foreground sm:text-4xl">
             {playlist?.title}
@@ -450,6 +471,18 @@ export function PlaylistWorkspace({ playlistId }: PlaylistWorkspaceProps) {
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
+          {isOwner && share && (
+            <button
+              type="button"
+              onClick={() => setShowPrivacy((v) => !v)}
+              aria-expanded={showPrivacy}
+              title="Change who can see this playlist, invite guests, or delete it"
+              className="melo-focus-ring inline-flex items-center gap-1.5 rounded-lg border border-border bg-white/5 px-3 py-2 text-[11px] font-bold text-muted-foreground hover:text-foreground"
+            >
+              <Settings2 className="h-3.5 w-3.5" aria-hidden="true" />
+              {showPrivacy ? "Close privacy" : "Privacy"}
+            </button>
+          )}
           {isOwner && (
             <button
               type="button"
@@ -476,6 +509,45 @@ export function PlaylistWorkspace({ playlistId }: PlaylistWorkspaceProps) {
           )}
         </div>
       </div>
+
+      {isOwner && share && showPrivacy && (
+        <section
+          aria-label="Playlist privacy and sharing"
+          className="max-w-xl rounded-2xl border border-border bg-card/50 p-4"
+        >
+          <h2 className="mb-1 text-sm font-bold text-foreground">Privacy & sharing</h2>
+          <p className="mb-3 text-[11px] text-muted-foreground">
+            Private = only you. Shared = private + guests you invite. Public = everyone.
+          </p>
+          <PlaylistPrivacyManager
+            shareId={share.id}
+            initialVisibility={share.visibility}
+            initialAllowedUsers={shareGuests}
+            playlistTitle={playlist?.title}
+            onChanged={(updated) => {
+              setShare((prev) =>
+                prev
+                  ? {
+                      ...prev,
+                      visibility: updated.visibility as "public" | "private",
+                      allowedUserIds: updated.allowedUserIds ?? prev.allowedUserIds,
+                    }
+                  : prev
+              );
+              if (updated.allowedUserIds && updated.allowedUserIds.length === 0) {
+                setShareGuests([]);
+              }
+            }}
+            onGuestsChanged={(guests) => {
+              setShareGuests(guests);
+              setShare((prev) =>
+                prev ? { ...prev, allowedUserIds: guests.map((g) => g.id) } : prev
+              );
+            }}
+            onDeleted={() => router.push("/playlists")}
+          />
+        </section>
+      )}
 
       {syncMsg && (
         <p

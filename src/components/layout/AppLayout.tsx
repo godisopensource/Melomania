@@ -6,6 +6,7 @@ import { Navbar } from "./Navbar";
 import { Sidebar } from "./Sidebar";
 import { MobileNav } from "./MobileNav";
 import { AuthModal } from "./AuthModal";
+import { OnboardingModal } from "./OnboardingModal";
 import { YouTubePlayer } from "../player/YouTubePlayer";
 import { usePlayer } from "../providers/PlayerProvider";
 import { Disc } from "lucide-react";
@@ -90,6 +91,7 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
 
       <MobileNav />
       <AuthModal />
+      <OnboardingModal />
     </div>
   );
 }

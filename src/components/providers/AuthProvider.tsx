@@ -21,6 +21,9 @@ interface AuthContextType {
   closeAuthModal: () => void;
   authModalOpen: boolean;
   authModalMode: "login" | "register";
+  /** Onboarding post-inscription : choix des services à connecter/activer. */
+  onboardingOpen: boolean;
+  completeOnboarding: () => void;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -30,6 +33,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [isLoading, setIsLoading] = useState(true);
   const [authModalOpen, setAuthModalOpen] = useState(false);
   const [authModalMode, setAuthModalMode] = useState<"login" | "register">("login");
+  const [onboardingOpen, setOnboardingOpen] = useState(false);
 
   const refreshUser = async () => {
     try {
@@ -37,6 +41,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       if (res.ok) {
         const data = await res.json();
         setUser(data.user || null);
+        // Retour d'un OAuth Spotify lancé depuis l'onboarding : on rouvre
+        // l'onboarding pour finaliser (jamais pour les comptes existants,
+        // qui n'ont pas le flag pending).
+        try {
+          const pending = window.localStorage.getItem("melomania:onboarding-pending") === "1";
+          const done = window.localStorage.getItem("melomania:onboarded") === "1";
+          if (pending && data.user && !done) {
+            window.localStorage.removeItem("melomania:onboarding-pending");
+            setOnboardingOpen(true);
+          }
+        } catch {}
       }
     } catch (err) {
       console.error("Failed to load user session:", err);
@@ -98,6 +113,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       }
       setUser(resData.user);
       setAuthModalOpen(false);
+      // Nouveau compte : onboarding du choix des services (une seule fois).
+      try {
+        if (window.localStorage.getItem("melomania:onboarded") !== "1") {
+          setOnboardingOpen(true);
+        }
+      } catch {
+        setOnboardingOpen(true);
+      }
       return { success: true };
     } catch (err: any) {
       return { success: false, error: err.message };
@@ -122,6 +145,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setAuthModalOpen(false);
   };
 
+  const completeOnboarding = () => {
+    try {
+      window.localStorage.setItem("melomania:onboarded", "1");
+      window.localStorage.removeItem("melomania:onboarding-pending");
+    } catch {}
+    setOnboardingOpen(false);
+  };
+
   return (
     <AuthContext.Provider
       value={{
@@ -135,6 +166,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         closeAuthModal,
         authModalOpen,
         authModalMode,
+        onboardingOpen,
+        completeOnboarding,
       }}
     >
       {children}

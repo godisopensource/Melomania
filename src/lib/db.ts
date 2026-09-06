@@ -1179,6 +1179,18 @@ class MelomaniaDatabase {
     });
   }
 
+  async updateConversationThread(
+    id: string,
+    updates: Partial<ConversationThread>
+  ): Promise<ConversationThread | null> {
+    return this.mutate((data) => {
+      const thread = data.conversationThreads.find((t) => t.id === id);
+      if (!thread) return null;
+      Object.assign(thread, updates, { updatedAt: new Date().toISOString() });
+      return hydrateThread(data, thread);
+    });
+  }
+
   // --- CONVERSATION PARTICIPANTS ---
   async getParticipantsByConversationId(
     conversationId: string

@@ -91,12 +91,16 @@ export async function PATCH(
 
     // 1. Switch visibility at any time (public <-> private). The invited
     //    users list is preserved so going private again restores sharing.
+    //    The linked conversation thread mirrors the share visibility.
     if (action === "set_visibility") {
       const { visibility } = body;
       if (visibility !== "public" && visibility !== "private") {
         return NextResponse.json({ error: "visibility must be 'public' or 'private'." }, { status: 400 });
       }
       await db.updateMusicShare(id, { visibility } as any);
+      try {
+        await db.updateConversationThread(share.conversationId, { visibility } as any);
+      } catch {}
       const updated = await db.getMusicShareById(id, user.id);
       return NextResponse.json({ share: updated });
     }
@@ -129,6 +133,12 @@ export async function PATCH(
         joinedAt: now,
       });
       if (!already) {
+        const resourceWord = share.resource?.type === "playlist" ? "playlist" : "track";
+        const privacyWord = share.visibility === "private" ? "private " : "";
+        const intro = (share.introductoryComment || "").trim();
+        const snippet = intro
+          ? `: \u201c${intro.slice(0, 140)}${intro.length > 140 ? "\u2026" : ""}\u201d`
+          : "";
         await db.createNotification({
           id: `notif_${Date.now()}_${rand}`,
           recipientId: target.id,
@@ -138,7 +148,7 @@ export async function PATCH(
           shareId: share.id,
           musicResourceId: share.resourceId,
           isRead: false,
-          message: `${user.displayName} shared ${share.visibility === "private" ? "a private track" : "a track"} with you`,
+          message: `${user.displayName} shared a ${privacyWord}${resourceWord} with you${snippet}`,
           createdAt: now,
         });
       }

@@ -14,6 +14,8 @@ import {
 } from "lucide-react";
 import { Comment } from "@/types";
 import { cn } from "@/lib/utils";
+import { AddToAppleMusicButton } from "./AddToAppleMusicButton";
+import { AddToSpotifyButton } from "./AddToSpotifyButton";
 
 interface YouTubeControlsProps {
   comments?: Comment[];
@@ -193,6 +195,10 @@ export function YouTubeControls({
             <span>Add note at {formatTime(currentTime)}</span>
           </button>
         )}
+
+        {/* Streaming : visibles uniquement si activés/connectés */}
+        <AddToAppleMusicButton />
+        <AddToSpotifyButton />
       </div>
     </div>
   );

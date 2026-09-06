@@ -28,6 +28,9 @@ export function ExportModal({ isOpen, onClose, resource }: ExportModalProps) {
   const [exportJob, setExportJob] = useState<ExportJob | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [customTitle, setCustomTitle] = useState(resource.title || "Melomania Export");
+  // L'onglet Apple Music n'existe qu'avec un vrai compte connecté (MusicKit
+  // payant). En mode gratuit, seul l'export Spotify est proposé.
+  const [appleRealConnected, setAppleRealConnected] = useState(false);
 
   useEffect(() => {
     if (!isOpen) {
@@ -37,6 +40,19 @@ export function ExportModal({ isOpen, onClose, resource }: ExportModalProps) {
       setErrorMsg(null);
       return;
     }
+
+    // Toujours Spotify par défaut ; Apple seulement si vraiment connecté.
+    setProvider("spotify");
+    fetch("/api/connections")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data) => {
+        const list: any[] = data?.connections || [];
+        const apple = list.find((c) => c.provider === "apple_music");
+        const isReal = !!apple && apple.isReal !== false;
+        setAppleRealConnected(isReal);
+        if (!isReal) setProvider("spotify");
+      })
+      .catch(() => setAppleRealConnected(false));
 
     startMatching();
   }, [isOpen, provider, resource.id]);
@@ -159,7 +175,7 @@ export function ExportModal({ isOpen, onClose, resource }: ExportModalProps) {
           </button>
         </div>
 
-        {/* Provider Switcher */}
+        {/* Provider Switcher — Apple visible uniquement si vraiment connecté */}
         <div className="flex border-b border-border bg-black/20 p-2.5 gap-2">
           <button
             onClick={() => setProvider("spotify")}
@@ -171,16 +187,18 @@ export function ExportModal({ isOpen, onClose, resource }: ExportModalProps) {
           >
             <span>Spotify</span>
           </button>
-          <button
-            onClick={() => setProvider("apple_music")}
-            className={`flex flex-1 items-center justify-center gap-2 rounded-lg py-2 text-xs font-semibold transition-all ${
-              provider === "apple_music"
-                ? "bg-[#FC3C44] text-white shadow"
-                : "bg-white/5 text-muted-foreground hover:text-foreground"
-            }`}
-          >
-            <span>Apple Music</span>
-          </button>
+          {appleRealConnected && (
+            <button
+              onClick={() => setProvider("apple_music")}
+              className={`flex flex-1 items-center justify-center gap-2 rounded-lg py-2 text-xs font-semibold transition-all ${
+                provider === "apple_music"
+                  ? "bg-[#FC3C44] text-white shadow"
+                  : "bg-white/5 text-muted-foreground hover:text-foreground"
+              }`}
+            >
+              <span>Apple Music</span>
+            </button>
+          )}
         </div>
 
         {/* Content Area */}
