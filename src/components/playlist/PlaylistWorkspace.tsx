@@ -11,6 +11,9 @@ import {
   Inbox,
   ChevronUp,
   Lock,
+  RefreshCw,
+  ZoomIn,
+  ZoomOut,
 } from "lucide-react";
 import { GapComment, MusicResource, PlaylistCategory, PlaylistViewMode, EmotionalCriterion } from "@/types";
 import { usePlayer } from "../providers/PlayerProvider";
@@ -28,6 +31,9 @@ import { formatTime } from "@/lib/utils";
 interface PlaylistWorkspaceProps {
   playlistId: string;
 }
+
+// Emotional map zoom levels (width multipliers), shared by curator + vinyl bands.
+const MAP_ZOOMS = [1, 1.5, 2, 3, 4];
 
 export function PlaylistWorkspace({ playlistId }: PlaylistWorkspaceProps) {
   const { currentTrack, isPlaying, playQueue, pause, resume } = usePlayer();
@@ -57,6 +63,11 @@ export function PlaylistWorkspace({ playlistId }: PlaylistWorkspaceProps) {
   const [critMin, setCritMin] = useState("");
   const [critMax, setCritMax] = useState("");
   const [creatingCrit, setCreatingCrit] = useState(false);
+  const [syncing, setSyncing] = useState(false);
+  const [syncMsg, setSyncMsg] = useState<{ kind: "ok" | "info" | "error"; text: string } | null>(null);
+
+  // Emotional map zoom: multiplies the band width, the band scrolls past 100%.
+  const [mapZoomIdx, setMapZoomIdx] = useState(0);
 
   // Desktop shows the side panel; mobile/tablet use a 1px audio host + sheets.
   const [isDesktop, setIsDesktop] = useState(false);
@@ -238,6 +249,51 @@ export function PlaylistWorkspace({ playlistId }: PlaylistWorkspaceProps) {
       setError(e.message);
     }
   };
+  // Non-destructive resync from YouTube Music: new tracks are appended,
+  // existing curation (scores, categories, notes) is never touched.
+  const handleSync = async () => {
+    if (syncing) return;
+    setSyncing(true);
+    setSyncMsg(null);
+    try {
+      const res = await fetch(`/api/playlists/${playlistId}/sync`, { method: "POST" });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Sync failed.");
+      await fetchAll(true);
+      const parts: string[] = [];
+      if (data.addedCount > 0)
+        parts.push(`+${data.addedCount} new track${data.addedCount > 1 ? "s" : ""} added`);
+      if (data.reorderApplied)
+        parts.push("order updated to match YouTube");
+      if (Array.isArray(data.reorderSkipped) && data.reorderSkipped.length > 0) {
+        const names = data.reorderSkipped
+          .map((s: any) => `“${s.categoryName}” (${s.trackTitles.join(", ")})`)
+          .join("; ");
+        parts.push(
+          `YouTube order changed but NOT applied — it would split categor${data.reorderSkipped.length > 1 ? "ies" : "y"} ${names}. Fix the categories, then sync again.`
+        );
+      }
+      if (data.updatedCount > 0)
+        parts.push(`${data.updatedCount} metadata refresh${data.updatedCount > 1 ? "es" : ""}`);
+      if (data.removedFromSourceCount > 0)
+        parts.push(
+          `${data.removedFromSourceCount} no longer on YouTube (kept, nothing deleted)`
+        );
+      const blocked = Array.isArray(data.reorderSkipped) && data.reorderSkipped.length > 0;
+      setSyncMsg({
+        kind: blocked ? "error" : data.addedCount > 0 || data.reorderApplied ? "ok" : "info",
+        text:
+          parts.length > 0
+            ? parts.join(" · ")
+            : "Already up to date — nothing new on YouTube.",
+      });
+    } catch (e: any) {
+      setSyncMsg({ kind: "error", text: e.message });
+    } finally {
+      setSyncing(false);
+    }
+  };
+
   const createCategory = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
     if (!newCat.trim() || creatingCat) return;
@@ -261,7 +317,7 @@ export function PlaylistWorkspace({ playlistId }: PlaylistWorkspaceProps) {
 
   const renderCurveBand = (compact: boolean) => (
     <div className="melo-paper-line overflow-hidden rounded-2xl border border-border bg-black/60">
-      <div className="flex items-center justify-between px-4 pt-3">
+      <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2 px-4 pt-3">
         <p className="font-mono text-[10px] uppercase tracking-[0.18em] text-muted-foreground">
           Emotional map ·{" "}
           {legendItems
@@ -273,7 +329,42 @@ export function PlaylistWorkspace({ playlistId }: PlaylistWorkspaceProps) {
               </span>
             ))}
         </p>
-        <p className="hidden font-mono text-[10px] text-muted-foreground sm:block">original order Nº</p>
+        <div className="flex items-center gap-3">
+          <p className="hidden font-mono text-[10px] text-muted-foreground sm:block">original order Nº</p>
+          <div className="flex items-center gap-1.5" role="group" aria-label="Emotional map zoom">
+            <button
+              type="button"
+              onClick={() => setMapZoomIdx((i) => Math.max(0, i - 1))}
+              disabled={mapZoomIdx === 0}
+              className="melo-focus-ring rounded-lg border border-border bg-white/5 p-1.5 text-muted-foreground hover:text-foreground disabled:opacity-30"
+              aria-label="Zoom out of the emotional map"
+            >
+              <ZoomOut className="h-3.5 w-3.5" />
+            </button>
+            <input
+              type="range"
+              min={0}
+              max={MAP_ZOOMS.length - 1}
+              step={1}
+              value={mapZoomIdx}
+              onChange={(e) => setMapZoomIdx(Number(e.target.value))}
+              aria-label={`Emotional map zoom, ${Math.round(MAP_ZOOMS[mapZoomIdx] * 100)} percent`}
+              className="melo-range w-20 sm:w-24"
+            />
+            <button
+              type="button"
+              onClick={() => setMapZoomIdx((i) => Math.min(MAP_ZOOMS.length - 1, i + 1))}
+              disabled={mapZoomIdx === MAP_ZOOMS.length - 1}
+              className="melo-focus-ring rounded-lg border border-border bg-white/5 p-1.5 text-muted-foreground hover:text-foreground disabled:opacity-30"
+              aria-label="Zoom in on the emotional map"
+            >
+              <ZoomIn className="h-3.5 w-3.5" />
+            </button>
+            <span className="w-10 text-right font-mono text-[10px] text-muted-foreground" aria-hidden="true">
+              {Math.round(MAP_ZOOMS[mapZoomIdx] * 100)}%
+            </span>
+          </div>
+        </div>
       </div>
       <div className="relative h-[150px] px-2 pb-1">
         {anyCurveVisible ? (
@@ -290,6 +381,7 @@ export function PlaylistWorkspace({ playlistId }: PlaylistWorkspaceProps) {
               if (t) handleSelect(t);
             }}
             compact={compact}
+            zoom={MAP_ZOOMS[mapZoomIdx]}
           />
         ) : (
           <p className="flex h-full items-center justify-center text-[11px] text-muted-foreground">
@@ -358,6 +450,22 @@ export function PlaylistWorkspace({ playlistId }: PlaylistWorkspaceProps) {
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
+          {isOwner && (
+            <button
+              type="button"
+              onClick={handleSync}
+              disabled={syncing}
+              title="Fetch new tracks and order from YouTube Music without touching your scores, categories or notes"
+              className="melo-focus-ring inline-flex items-center gap-1.5 rounded-lg border border-border bg-white/5 px-3 py-2 text-[11px] font-bold text-muted-foreground hover:text-foreground disabled:opacity-50"
+            >
+              {syncing ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
+              ) : (
+                <RefreshCw className="h-3.5 w-3.5" aria-hidden="true" />
+              )}
+              {syncing ? "Syncing…" : "Sync with YouTube"}
+            </button>
+          )}
           {isOwner ? (
             <PlaylistViewToggle mode={mode} onChange={setMode} />
           ) : (
@@ -368,6 +476,21 @@ export function PlaylistWorkspace({ playlistId }: PlaylistWorkspaceProps) {
           )}
         </div>
       </div>
+
+      {syncMsg && (
+        <p
+          role="status"
+          className={`rounded-xl border px-3 py-2 text-xs ${
+            syncMsg.kind === "error"
+              ? "border-destructive/40 bg-destructive/10 text-destructive"
+              : syncMsg.kind === "ok"
+                ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-300"
+                : "border-border bg-white/5 text-muted-foreground"
+          }`}
+        >
+          {syncMsg.text}
+        </p>
+      )}
 
       <div className="flex flex-col gap-5 xl:grid xl:grid-cols-[1fr_340px]">
         <div className="min-w-0">

@@ -7,6 +7,8 @@ import { CategoryContainer } from "./CategoryContainer";
 import { GapCommentBubble } from "./GapCommentBubble";
 import { GapCommentComposer } from "./GapCommentComposer";
 import { GapStrip } from "./GapStrip";
+import { EdgeGapSection } from "./EdgeGapSection";
+import { INTRO_GAP_POSITION } from "@/lib/gap-comments";
 
 interface CuratorFlowProps {
   tracks: MusicResource[];
@@ -83,6 +85,16 @@ export function CuratorFlow({
 
   const gapsAt = (pos: number) => gapComments.filter((g) => g.afterSourcePosition === pos);
   const catOf = (id: string | null) => categories.find((c) => c.id === id) ?? null;
+  const trackCount = ordered.length;
+  const outroPos = Math.max(0, trackCount - 1);
+  const introGaps = useMemo(
+    () => gapComments.filter((g) => g.afterSourcePosition === INTRO_GAP_POSITION),
+    [gapComments]
+  );
+  const outroGaps = useMemo(
+    () => (trackCount > 0 ? gapComments.filter((g) => g.afterSourcePosition === outroPos) : []),
+    [gapComments, outroPos, trackCount]
+  );
 
   const assign = async (trackId: string, categoryId: string | null) => {
     setError(null);
@@ -119,7 +131,7 @@ export function CuratorFlow({
       <div key={`gaprow-${pos}`} className="flex flex-col items-center gap-2 py-1.5">
         <div className="flex items-center gap-2">
           {gaps.map((g) => (
-            <GapCommentBubble key={g.id} gap={g} isOwner={isOwner} onDeleted={onGapsChanged} />
+            <GapCommentBubble key={g.id} gap={g} isOwner={isOwner} trackCount={trackCount} onDeleted={onGapsChanged} />
           ))}
           {isOwner && composerAt !== pos && (
             <button
@@ -137,6 +149,7 @@ export function CuratorFlow({
           <GapCommentComposer
             playlistId={playlistId}
             afterSourcePosition={pos}
+            trackCount={trackCount}
             onPosted={() => {
               setComposerAt(null);
               onGapsChanged();
@@ -158,6 +171,24 @@ export function CuratorFlow({
           <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-destructive" />
           {error}
         </p>
+      )}
+
+      {(introGaps.length > 0 || isOwner) && (
+        <EdgeGapSection
+          kind="intro"
+          gaps={introGaps}
+          trackCount={trackCount}
+          isOwner={isOwner}
+          playlistId={playlistId}
+          composerOpen={composerAt === INTRO_GAP_POSITION}
+          onOpenComposer={() => setComposerAt(INTRO_GAP_POSITION)}
+          onCloseComposer={() => setComposerAt(null)}
+          onPosted={() => {
+            setComposerAt(null);
+            onGapsChanged();
+          }}
+          onDeleted={onGapsChanged}
+        />
       )}
 
       {staged.length > 0 && (
@@ -215,6 +246,7 @@ export function CuratorFlow({
                 nextTrackId={nextTrack?.id ?? null}
                 gaps={innerGaps}
                 playlistId={playlistId}
+                trackCount={trackCount}
                 composerAt={composerAt}
                 onComposerAt={setComposerAt}
                 onGapsChanged={onGapsChanged}
@@ -241,6 +273,7 @@ export function CuratorFlow({
                       playlistId={playlistId}
                       minPos={firstPos}
                       maxPos={Math.max(firstPos, lastPos - 1)}
+                      trackCount={trackCount}
                       composerAt={composerAt}
                       onComposerAt={setComposerAt}
                       onPosted={() => {
@@ -292,6 +325,24 @@ export function CuratorFlow({
           </React.Fragment>
         );
       })}
+
+      {(outroGaps.length > 0 || isOwner) && (
+        <EdgeGapSection
+          kind="outro"
+          gaps={outroGaps}
+          trackCount={trackCount}
+          isOwner={isOwner}
+          playlistId={playlistId}
+          composerOpen={composerAt === outroPos}
+          onOpenComposer={() => setComposerAt(outroPos)}
+          onCloseComposer={() => setComposerAt(null)}
+          onPosted={() => {
+            setComposerAt(null);
+            onGapsChanged();
+          }}
+          onDeleted={onGapsChanged}
+        />
+      )}
     </div>
   );
 }

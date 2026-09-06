@@ -12,6 +12,8 @@ interface GapStripProps {
   /** Interior positions where a new comment may be slipped. */
   minPos: number;
   maxPos: number;
+  /** Current track count — lets bubbles tell intro / conclusion apart. */
+  trackCount: number;
   composerAt: number | null;
   onComposerAt: (pos: number | null) => void;
   onPosted: () => void;
@@ -25,6 +27,7 @@ export function GapStrip({
   playlistId,
   minPos,
   maxPos,
+  trackCount,
   composerAt,
   onComposerAt,
   onPosted,
@@ -60,7 +63,7 @@ export function GapStrip({
       {gaps.length > 0 && (
         <div className="flex flex-wrap items-center gap-2">
           {gaps.map((g) => (
-            <GapCommentBubble key={g.id} gap={g} isOwner={isOwner} onDeleted={onDeleted} />
+            <GapCommentBubble key={g.id} gap={g} isOwner={isOwner} trackCount={trackCount} onDeleted={onDeleted} />
           ))}
         </div>
       )}
@@ -102,6 +105,7 @@ export function GapStrip({
           <GapCommentComposer
             playlistId={playlistId}
             afterSourcePosition={composerAt ?? pickPos}
+            trackCount={trackCount}
             onPosted={onPosted}
             onCancel={() => onComposerAt(null)}
           />

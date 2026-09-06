@@ -4,6 +4,8 @@ import { Loader2, Disc3, ZoomIn, ZoomOut } from "lucide-react";
 import { GapComment, MusicResource, PlaylistCategory } from "@/types";
 import { VinylRecordCard } from "./VinylRecordCard";
 import { GapCommentBubble } from "./GapCommentBubble";
+import { EdgeGapSection } from "./EdgeGapSection";
+import { INTRO_GAP_POSITION } from "@/lib/gap-comments";
 
 interface VinylShelfProps {
   tracks: MusicResource[];
@@ -71,6 +73,16 @@ export function VinylShelf({
 
   const gapsAt = (pos: number) => gapComments.filter((g) => g.afterSourcePosition === pos);
   const catOf = (id: string | null) => categories.find((c) => c.id === id) ?? null;
+  const trackCount = ordered.length;
+  const outroPos = Math.max(0, trackCount - 1);
+  const introGaps = useMemo(
+    () => gapComments.filter((g) => g.afterSourcePosition === INTRO_GAP_POSITION),
+    [gapComments]
+  );
+  const outroGaps = useMemo(
+    () => (trackCount > 0 ? gapComments.filter((g) => g.afterSourcePosition === outroPos) : []),
+    [gapComments, outroPos, trackCount]
+  );
 
   if (loading) {
     return (
@@ -132,6 +144,24 @@ export function VinylShelf({
         </div>
       </div>
 
+      {(introGaps.length > 0 || outroGaps.length > 0) && (
+        <p className="sr-only">
+          This playlist has {introGaps.length > 0 ? "an intro note" : "no intro note"}
+          {outroGaps.length > 0 ? " and a conclusion note" : " and no conclusion note"}.
+        </p>
+      )}
+      {introGaps.length > 0 && (
+        <EdgeGapSection
+          kind="intro"
+          gaps={introGaps}
+          trackCount={trackCount}
+          isOwner={isOwner}
+          playlistId=""
+          allowCompose={false}
+          onDeleted={onGapsChanged}
+        />
+      )}
+
       <div className="melo-grain space-y-5 overflow-hidden rounded-2xl border border-border bg-[#0d0b09] p-4 sm:p-6">
         {runs.map((run, ri) => {
           const category = catOf(run.categoryId);
@@ -180,7 +210,7 @@ export function VinylShelf({
                       {showGaps.length > 0 && (
                         <div className="flex items-center" aria-label={`Comments after track ${pos + 1}`}>
                           {showGaps.map((g) => (
-                            <GapCommentBubble key={g.id} gap={g} isOwner={isOwner} onDeleted={onGapsChanged} />
+                            <GapCommentBubble key={g.id} gap={g} isOwner={isOwner} trackCount={trackCount} onDeleted={onGapsChanged} />
                           ))}
                         </div>
                       )}
@@ -197,7 +227,7 @@ export function VinylShelf({
                 <div className="flex items-center justify-center gap-2 py-2">
                   <span className="h-px w-16 bg-white/10" aria-hidden="true" />
                   {boundaryGaps.map((g) => (
-                    <GapCommentBubble key={g.id} gap={g} isOwner={isOwner} onDeleted={onGapsChanged} />
+                    <GapCommentBubble key={g.id} gap={g} isOwner={isOwner} trackCount={trackCount} onDeleted={onGapsChanged} />
                   ))}
                   <span className="h-px w-16 bg-white/10" aria-hidden="true" />
                 </div>
@@ -206,6 +236,17 @@ export function VinylShelf({
           );
         })}
       </div>
+      {outroGaps.length > 0 && (
+        <EdgeGapSection
+          kind="outro"
+          gaps={outroGaps}
+          trackCount={trackCount}
+          isOwner={isOwner}
+          playlistId=""
+          allowCompose={false}
+          onDeleted={onGapsChanged}
+        />
+      )}
     </section>
   );
 }

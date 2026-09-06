@@ -1,19 +1,39 @@
 "use client";
 import React, { useState } from "react";
 import { Send, Loader2, X } from "lucide-react";
+import { INTRO_GAP_POSITION } from "@/lib/gap-comments";
 
 interface GapCommentComposerProps {
   playlistId: string;
   afterSourcePosition: number;
+  /** Current track count — lets the composer label intro / conclusion. */
+  trackCount?: number;
   onPosted: () => void;
   onCancel: () => void;
 }
 
-/** Creator-only inline composer for a comment between two tracks. */
-export function GapCommentComposer({ playlistId, afterSourcePosition, onPosted, onCancel }: GapCommentComposerProps) {
+/** Creator-only inline composer for a comment between two tracks, or as playlist intro / conclusion. */
+export function GapCommentComposer({ playlistId, afterSourcePosition, trackCount = 0, onPosted, onCancel }: GapCommentComposerProps) {
   const [body, setBody] = useState("");
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const intro = afterSourcePosition === INTRO_GAP_POSITION;
+  const outro = trackCount > 0 && afterSourcePosition === trackCount - 1;
+  const heading = intro
+    ? "Intro · before Nº 1"
+    : outro
+      ? `Conclusion · after Nº ${trackCount}`
+      : `Between Nº ${afterSourcePosition + 1} & ${afterSourcePosition + 2}`;
+  const placeholder = intro
+    ? "Introduce the playlist, set the scene…"
+    : outro
+      ? "Conclude, dedicate, open the next chapter…"
+      : "A transition note, a story, a dedication…";
+  const ariaLabel = intro
+    ? "Add an intro comment before the first track"
+    : outro
+      ? `Add a conclusion comment after track ${trackCount}`
+      : `Add a comment between tracks ${afterSourcePosition + 1} and ${afterSourcePosition + 2}`;
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -40,11 +60,11 @@ export function GapCommentComposer({ playlistId, afterSourcePosition, onPosted, 
     <form
       onSubmit={submit}
       className="w-full rounded-xl border border-dashed border-[#e8b34b]/40 bg-[#e8b34b]/[0.05] p-3"
-      aria-label={`Add a comment between tracks ${afterSourcePosition + 1} and ${afterSourcePosition + 2}`}
+      aria-label={ariaLabel}
     >
       <div className="mb-2 flex items-center justify-between">
         <span className="font-mono text-[10px] uppercase tracking-[0.14em] text-[#e8b34b]">
-          Between Nº {afterSourcePosition + 1} & {afterSourcePosition + 2}
+          {heading}
         </span>
         <button
           type="button"
@@ -58,7 +78,7 @@ export function GapCommentComposer({ playlistId, afterSourcePosition, onPosted, 
       <textarea
         value={body}
         onChange={(e) => setBody(e.target.value)}
-        placeholder="A transition note, a story, a dedication…"
+        placeholder={placeholder}
         maxLength={1000}
         rows={2}
         autoFocus

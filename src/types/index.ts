@@ -135,11 +135,13 @@ export interface TrackNote {
 
 export type PlaylistViewMode = 'curator' | 'vinyl';
 
-/** Editorial comment slipped between two consecutive tracks (after `afterSourcePosition`). */
+/** Editorial comment: intro (-1, before Nº 1), between two consecutive tracks
+ * (after `afterSourcePosition`), or conclusion (after the last track, i.e.
+ * `afterSourcePosition === trackCount - 1`). */
 export interface GapComment {
   id: string;
   playlistId: string;
-  /** Sits between the track at this sourcePosition and the next one. */
+  /** -1 = intro; otherwise sits after the track at this sourcePosition. */
   afterSourcePosition: number;
   authorId: string;
   author?: User;

@@ -1,9 +1,12 @@
-// GET + POST /api/playlists/:id/gap-comments — comments between two tracks.
+// GET + POST /api/playlists/:id/gap-comments — editorial comments.
+// Positions (afterSourcePosition): -1 = intro (before Nº 1),
+// 0..count-2 = between two tracks, count-1 = conclusion (after Nº N).
 // Creation is reserved for the playlist creator.
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { requirePlaylistOwner } from "@/lib/playlist-auth";
 import { GapComment } from "@/types";
+import { INTRO_GAP_POSITION } from "@/lib/gap-comments";
 
 export async function GET(
   _req: NextRequest,
@@ -32,8 +35,12 @@ export async function POST(
     const curated = await db.getCuratedPlaylist(playlistId);
     const count = curated?.tracks.length ?? 0;
     const pos = Number(afterSourcePosition);
-    // Sits between track `pos` and `pos + 1`.
-    if (!Number.isInteger(pos) || pos < 0 || (count > 0 && pos > count - 2)) {
+    // -1 = intro (before the first track), count-1 = conclusion (after the
+    // last track), anything in between sits between track `pos` and `pos + 1`.
+    const isIntro = pos === INTRO_GAP_POSITION;
+    const isOutro = count > 0 && pos === count - 1;
+    const isInterior = count > 0 && Number.isInteger(pos) && pos >= 0 && pos <= count - 2;
+    if (!Number.isInteger(pos) || (!isIntro && !isOutro && !isInterior)) {
       return NextResponse.json({ error: "Invalid position for this comment." }, { status: 400 });
     }
 

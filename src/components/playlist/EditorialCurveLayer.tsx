@@ -1,5 +1,5 @@
 "use client";
-import React, { useMemo } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { EmotionalCriterion, MusicResource, PlaylistCategory } from "@/types";
 import { catmullRomPath } from "@/lib/curves";
 
@@ -16,12 +16,13 @@ interface EditorialCurveLayerProps {
   onPointSelect: (id: string) => void;
   /** Compact mode for the vinyl view header band. */
   compact?: boolean;
+  /** Horizontal zoom multiplier (1 = fit the band width, > 1 scrolls). */
+  zoom?: number;
 }
 
-const W = 1000;
-const H = 150;
+const PAD_X = 24;
 const TOP = 10;
-const BAND = H - 20;
+const BOTTOM_PAD = 10;
 
 interface CurveDef {
   key: string;
@@ -35,6 +36,10 @@ interface CurveDef {
  * X follows sourcePosition (track Nº), Y follows the manual score
  * (100 at the top). Tracks without a score default to 50.
  * Smoothed with Catmull–Rom interpolation.
+ *
+ * The layer measures its own box and draws in real pixels (1 unit = 1px),
+ * so circles stay round and labels undistorted at any container size.
+ * `zoom` widens the drawing surface horizontally; the band scrolls.
  */
 export function EditorialCurveLayer({
   tracks,
@@ -46,7 +51,34 @@ export function EditorialCurveLayer({
   onPointHover,
   onPointSelect,
   compact,
+  zoom = 1,
 }: EditorialCurveLayerProps) {
+  const wrapRef = useRef<HTMLDivElement>(null);
+  const [vp, setVp] = useState<{ w: number; h: number } | null>(null);
+
+  useEffect(() => {
+    const el = wrapRef.current;
+    if (!el) return;
+    const update = () => {
+      const r = el.getBoundingClientRect();
+      setVp((prev) => {
+        const w = Math.max(0, Math.round(r.width));
+        const h = Math.max(0, Math.round(r.height));
+        if (prev && prev.w === w && prev.h === h) return prev;
+        return { w, h };
+      });
+    };
+    update();
+    const ro = new ResizeObserver(update);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
+  const safeZoom = Number.isFinite(zoom) && zoom > 0 ? zoom : 1;
+  // Virtual drawing surface in real pixels: 1 SVG unit = 1 px, no stretching.
+  const W = vp && vp.w > 0 ? Math.max(1, Math.round(vp.w * safeZoom)) : 0;
+  const H = vp && vp.h > 0 ? Math.max(1, Math.round(vp.h)) : 0;
+  const BAND = Math.max(1, H - TOP - BOTTOM_PAD);
   const ordered = useMemo(
     () => [...tracks].sort((a, b) => (a.sourcePosition ?? 0) - (b.sourcePosition ?? 0)),
     [tracks]
@@ -72,8 +104,8 @@ export function EditorialCurveLayer({
     categories.find((c) => c.id === track.categoryId)?.color ?? "#8A8F98";
 
   const xFor = (pos: number): number => {
-    if (ordered.length <= 1) return W / 2;
-    return 24 + (pos / Math.max(1, ordered.length - 1)) * (W - 48);
+    if (ordered.length <= 1 || W <= 0) return W / 2;
+    return PAD_X + (pos / Math.max(1, ordered.length - 1)) * (W - PAD_X * 2);
   };
   const yFor = (score: number | null | undefined): number => {
     const s = score === null || score === undefined ? 50 : Math.max(0, Math.min(100, score));
@@ -93,13 +125,15 @@ export function EditorialCurveLayer({
   });
 
   return (
-    <svg
-      className="block h-full w-full"
-      viewBox={`0 0 ${W} ${H}`}
-      preserveAspectRatio="none"
-      role="img"
-      aria-label="Emotional curves across the playlist in original order"
-    >
+    <div ref={wrapRef} className="h-full w-full overflow-x-auto overflow-y-hidden">
+      {W > 0 && H > 0 ? (
+        <svg
+          width={W}
+          height={H}
+          viewBox={`0 0 ${W} ${H}`}
+          role="img"
+          aria-label="Emotional curves across the playlist in original order"
+        >
       <defs>
         {activeDefs.map((def) => (
           <linearGradient key={def.key} id={`melo-curve-${def.key}`} x1="0" y1="0" x2="1" y2="0">
@@ -172,6 +206,8 @@ export function EditorialCurveLayer({
           })
         )}
       </g>
-    </svg>
+        </svg>
+      ) : null}
+    </div>
   );
 }

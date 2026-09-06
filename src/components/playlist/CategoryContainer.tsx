@@ -22,6 +22,8 @@ interface CategoryContainerProps {
   /** Gap comments strictly inside this block. */
   gaps: GapComment[];
   playlistId: string;
+  /** Current track count — lets bubbles tell intro / conclusion apart. */
+  trackCount: number;
   composerAt: number | null;
   onComposerAt: (pos: number | null) => void;
   onGapsChanged: () => void;
@@ -52,6 +54,7 @@ export function CategoryContainer({
   nextTrackId,
   gaps,
   playlistId,
+  trackCount,
   composerAt,
   onComposerAt,
   onGapsChanged,
@@ -170,6 +173,7 @@ export function CategoryContainer({
             playlistId={playlistId}
             minPos={start}
             maxPos={Math.max(start, end - 1)}
+            trackCount={trackCount}
             composerAt={composerAt}
             onComposerAt={onComposerAt}
             onPosted={() => {

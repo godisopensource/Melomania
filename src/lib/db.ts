@@ -3,6 +3,8 @@ import path from "path";
 import crypto from "crypto";
 import bcrypt from "bcryptjs";
 import { neon } from "@neondatabase/serverless";
+import { normalizeMusicText } from "@/lib/utils";
+import { findChronologyViolations } from "@/lib/playlist-sync";
 import {
   User,
   MusicResource,
@@ -637,6 +639,392 @@ class MelomaniaDatabase {
     return this.mutate((data) => {
       data.musicSources.push(source);
       return source;
+    });
+  }
+
+  /** All music sources in one read (used for playlist sync diff). */
+  async getMusicSources(): Promise<MusicSource[]> {
+    return [...(await this.read()).musicSources];
+  }
+
+  /**
+   * Non-destructive sync of a playlist against a fresh YouTube fetch.
+   * - Existing tracks (matched by YouTube externalId) keep ALL curation
+   *   (category, scores, tags, notes) — only raw metadata is refreshed.
+   * - Missing tracks are created as clean slates (no scores/category).
+   * - Order follows the YouTube reference: if known tracks moved, their
+   *   sourcePosition is rewritten — this is the ONLY writer of sourcePosition
+   *   besides the initial import (manual edits stay forbidden). The rewrite
+   *   is applied ONLY when every category still groups consecutive tracks
+   *   (same invariant as `wouldBreakChronology`); otherwise the old order is
+   *   kept, new tracks are appended, and the blocking categories are reported.
+   * - Gap comments follow their anchor track on reorder; on a pure append a
+   *   conclusion comment (after the old last track) follows the new end.
+   * - Tracks absent from the fresh list are KEPT in place and reported.
+   * Single mutate → atomic.
+   */
+  async syncPlaylistWithFreshTracks(
+    playlistId: string,
+    fresh: Array<{
+      externalId: string;
+      title: string;
+      artist: string;
+      album?: string;
+      durationSeconds: number;
+      coverImageUrl?: string;
+      externalUrl: string;
+    }>
+  ): Promise<{
+    added: MusicResource[];
+    updatedCount: number;
+    removedFromSource: MusicResource[];
+    total: number;
+    reorderApplied: boolean;
+    reorderSkipped: Array<{
+      categoryId: string;
+      categoryName: string;
+      trackIds: string[];
+      trackTitles: string[];
+    }>;
+  }> {
+    const rand = () => Math.random().toString(36).slice(2, 8);
+    return this.mutate((data) => {
+      const playlist = findResourceById(data, playlistId);
+      if (!playlist || playlist.type !== "playlist") {
+        throw new Error("Playlist not found.");
+      }
+      const now = new Date().toISOString();
+
+      // resourceId -> youtube externalId
+      const extByResource = new Map<string, string>();
+      for (const s of data.musicSources) {
+        if (s.provider === "youtube" && s.musicResourceId && s.externalId) {
+          if (!extByResource.has(s.musicResourceId)) {
+            extByResource.set(s.musicResourceId, s.externalId);
+          }
+        }
+      }
+
+      const embedded: MusicResource[] = Array.isArray((playlist as any).tracks)
+        ? (playlist as any).tracks
+        : [];
+
+      // Dedupe fresh (first wins), skip entries without externalId.
+      const seen = new Set<string>();
+      const freshUnique: typeof fresh = [];
+      for (const f of fresh) {
+        if (!f.externalId || seen.has(f.externalId)) continue;
+        seen.add(f.externalId);
+        freshUnique.push(f);
+      }
+      const freshIds = new Set(freshUnique.map((f) => f.externalId));
+      const freshById = new Map(freshUnique.map((f) => [f.externalId, f]));
+
+      // Existing refs: embedded copies first (source of truth for order),
+      // fallback to top-level tracks carrying this playlistId (then seed the
+      // embedded array so counts stay consistent).
+      const topLevelTracks = data.musicResources.filter(
+        (r) => r.type === "track" && r.playlistId === playlistId
+      );
+      if (embedded.length === 0 && topLevelTracks.length > 0) {
+        (playlist as any).tracks = topLevelTracks.map((t) => ({ ...t }));
+      }
+      const existingRefs: MusicResource[] =
+        (playlist as any).tracks?.length > 0
+          ? [...((playlist as any).tracks as MusicResource[])]
+          : [...topLevelTracks];
+
+      let maxPos = -1;
+      for (const t of existingRefs) {
+        const p = t.sourcePosition ?? 0;
+        if (p > maxPos) maxPos = p;
+      }
+
+      // resourceId per YouTube externalId (first wins on ambiguous data).
+      const resByExt = new Map<string, string>();
+      for (const t of existingRefs) {
+        const ext = extByResource.get(t.id);
+        if (ext && !resByExt.has(ext)) resByExt.set(ext, t.id);
+      }
+      const existingExtIds = new Set(resByExt.keys());
+
+      // Order snapshot BEFORE any mutation, tracks sorted by position.
+      const byPosition = [...existingRefs].sort(
+        (a, b) => (a.sourcePosition ?? 0) - (b.sourcePosition ?? 0)
+      );
+
+      // Has the reference order changed for known tracks? Compare the
+      // reference sequence against the local sequence (stable ids).
+      const matchedRefOrder: string[] = [];
+      for (const f of freshUnique) {
+        const rid = resByExt.get(f.externalId);
+        if (rid) matchedRefOrder.push(rid);
+      }
+      const matchedLocalOrder = byPosition
+        .filter((t) => {
+          const ext = extByResource.get(t.id);
+          return ext ? freshIds.has(ext) : false;
+        })
+        .map((t) => t.id);
+      const orderChanged =
+        matchedRefOrder.length > 1 &&
+        matchedRefOrder.length === matchedLocalOrder.length &&
+        matchedRefOrder.some((id, i) => id !== matchedLocalOrder[i]);
+
+      // Proposed positions under the reference order: fresh tracks keep
+      // their reference index (existing by identity, new as placeholders),
+      // then kept-but-absent tracks (gone from YouTube or sourceless) tail
+      // in old relative order — never deleted, never interleaved.
+      const newPosOf = new Map<string, number>();
+      const freshNewPos = new Map<string, number>();
+      let cursor = 0;
+      for (const f of freshUnique) {
+        const rid = resByExt.get(f.externalId);
+        if (rid) newPosOf.set(rid, cursor);
+        else freshNewPos.set(f.externalId, cursor);
+        cursor++;
+      }
+      const keptAbsent = byPosition.filter((t) => {
+        const ext = extByResource.get(t.id);
+        return !ext || !freshIds.has(ext);
+      });
+      for (const t of keptAbsent) newPosOf.set(t.id, cursor++);
+
+      let updatedCount = 0;
+      // Refresh raw metadata of matched tracks (curation untouched).
+      for (const t of existingRefs) {
+        const ext = extByResource.get(t.id);
+        const f = ext ? freshById.get(ext) : undefined;
+        if (!f) continue;
+        const patch: Partial<MusicResource> = {};
+        if (f.title && f.title !== t.title) patch.title = f.title;
+        if (f.artist && f.artist !== t.artistName) patch.artistName = f.artist;
+        const album = f.album || playlist.title;
+        if (album && album !== t.albumName) patch.albumName = album;
+        if (typeof f.durationSeconds === "number" && f.durationSeconds !== t.durationSeconds) {
+          patch.durationSeconds = f.durationSeconds;
+        }
+        if (f.coverImageUrl && f.coverImageUrl !== t.coverImageUrl) {
+          patch.coverImageUrl = f.coverImageUrl;
+        }
+        if (Object.keys(patch).length > 0) {
+          if (patch.title) patch.normalizedTitle = normalizeMusicText(patch.title);
+          if (patch.artistName) patch.normalizedArtist = normalizeMusicText(patch.artistName);
+          patch.updatedAt = now;
+          Object.assign(t, patch);
+          // Mirror onto the top-level copy (embedded + top-level coexist).
+          const topById = data.musicResources.find((r) => r.id === t.id);
+          if (topById && topById !== t) Object.assign(topById, patch);
+          const src = data.musicSources.find(
+            (s) => s.provider === "youtube" && s.musicResourceId === t.id
+          );
+          if (src) {
+            src.sourceTitle = f.title;
+            src.sourceArtist = f.artist;
+            src.sourceDurationSeconds = f.durationSeconds;
+            src.externalUrl = f.externalUrl;
+            src.updatedAt = now;
+          }
+          updatedCount++;
+        }
+      }
+
+      // Category guard: the reference order is applied ONLY when every
+      // category still groups consecutive tracks under the new positions.
+      let reorderApplied = false;
+      let reorderSkipped: Array<{
+        categoryId: string;
+        categoryName: string;
+        trackIds: string[];
+        trackTitles: string[];
+      }> = [];
+      if (orderChanged) {
+        const simulated = existingRefs.map((t) => ({
+          id: t.id,
+          categoryId: t.categoryId ?? null,
+          sourcePosition: newPosOf.get(t.id) ?? t.sourcePosition ?? 0,
+        }));
+        const violations = findChronologyViolations(simulated);
+        if (violations.length === 0) {
+          reorderApplied = true;
+        } else {
+          const catName = new Map(
+            data.playlistCategories
+              .filter((c) => c.playlistId === playlistId)
+              .map((c) => [c.id, c.name] as [string, string])
+          );
+          const titleOf = new Map(existingRefs.map((t) => [t.id, t.title] as [string, string]));
+          reorderSkipped = violations.map((v) => ({
+            categoryId: v.categoryId,
+            categoryName: catName.get(v.categoryId) ?? v.categoryId,
+            trackIds: v.trackIds,
+            trackTitles: v.trackIds.map((id) => titleOf.get(id) ?? id),
+          }));
+        }
+      }
+
+      // sourcePosition writer (top-level + every embedded copy + enrichment).
+      // Sync is the only path allowed to rewrite positions; manual edits
+      // stay forbidden (see upsertTrackEnrichment + PATCH track route).
+      const setPositionEverywhere = (resourceId: string, pos: number) => {
+        for (const r of data.musicResources) {
+          if (r.id === resourceId) {
+            r.sourcePosition = pos;
+            r.updatedAt = now;
+          }
+          if (r.type === "playlist" && Array.isArray((r as any).tracks)) {
+            for (const t of (r as any).tracks as MusicResource[]) {
+              if (t.id === resourceId) {
+                t.sourcePosition = pos;
+                t.updatedAt = now;
+              }
+            }
+          }
+        }
+        const e = data.trackEnrichments.find((x) => x.resourceId === resourceId);
+        if (e) {
+          e.sourcePosition = pos;
+          e.updatedAt = now;
+        }
+      };
+
+      const createFreshTrack = (
+        f: (typeof freshUnique)[number],
+        pos: number
+      ): MusicResource => {
+        const trackId = `res_trk_${Date.now()}_${pos}_${rand()}`;
+        const track: MusicResource = {
+          id: trackId,
+          type: "track",
+          title: f.title,
+          artistName: f.artist,
+          albumName: f.album || playlist.title,
+          durationSeconds: f.durationSeconds,
+          coverImageUrl:
+            f.coverImageUrl ||
+            "https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=600",
+          normalizedTitle: normalizeMusicText(f.title),
+          normalizedArtist: normalizeMusicText(f.artist),
+          sourcePosition: pos,
+          playlistId,
+          categoryId: null,
+          moodScore: null,
+          softnessScore: null,
+          tags: [],
+          createdAt: now,
+          updatedAt: now,
+        };
+        data.musicResources.push(track);
+        if (!Array.isArray((playlist as any).tracks)) (playlist as any).tracks = [];
+        ((playlist as any).tracks as MusicResource[]).push({ ...track });
+        data.musicSources.push({
+          id: `src_trk_${Date.now()}_${pos}_${rand()}`,
+          musicResourceId: trackId,
+          provider: "youtube",
+          externalId: f.externalId,
+          externalUrl: f.externalUrl,
+          sourceTitle: track.title,
+          sourceArtist: track.artistName,
+          sourceDurationSeconds: track.durationSeconds,
+          createdAt: now,
+          updatedAt: now,
+        });
+        data.trackEnrichments.push({
+          resourceId: trackId,
+          playlistId,
+          sourcePosition: pos,
+          categoryId: null,
+          moodScore: null,
+          softnessScore: null,
+          tags: [],
+          updatedAt: now,
+        });
+        return track;
+      };
+
+      const added: MusicResource[] = [];
+      if (reorderApplied) {
+        // Anchor snapshot: gaps follow their track, not their position.
+        const anchorAt = new Map<number, string>();
+        for (const t of byPosition) {
+          const p = t.sourcePosition ?? 0;
+          if (!anchorAt.has(p)) anchorAt.set(p, t.id);
+        }
+        for (const t of existingRefs) {
+          const pos = newPosOf.get(t.id);
+          if (pos !== undefined && pos !== (t.sourcePosition ?? 0)) {
+            setPositionEverywhere(t.id, pos);
+          }
+        }
+        for (const f of freshUnique) {
+          if (existingExtIds.has(f.externalId)) continue;
+          const pos = freshNewPos.get(f.externalId);
+          if (pos === undefined) continue;
+          const track = createFreshTrack(f, pos);
+          added.push(track);
+          existingExtIds.add(f.externalId);
+          newPosOf.set(track.id, pos);
+        }
+        // Keep the embedded array in reference order (readers sort anyway).
+        ((playlist as any).tracks as MusicResource[]).sort(
+          (a, b) => (a.sourcePosition ?? 0) - (b.sourcePosition ?? 0)
+        );
+        const newMax = cursor - 1;
+        for (const g of data.gapComments) {
+          if (g.playlistId !== playlistId) continue;
+          const anchor = anchorAt.get(g.afterSourcePosition);
+          const target =
+            anchor !== undefined && newPosOf.has(anchor)
+              ? (newPosOf.get(anchor) as number)
+              : newMax;
+          if (target !== g.afterSourcePosition) {
+            g.afterSourcePosition = target;
+            g.updatedAt = now;
+          }
+        }
+      } else {
+        // No (or blocked) reorder: append missing tracks after the old max
+        // so existing positions, interior gaps and category blocks never shift.
+        let nextPos = maxPos + 1;
+        for (const f of freshUnique) {
+          if (existingExtIds.has(f.externalId)) continue;
+          const track = createFreshTrack(f, nextPos);
+          added.push(track);
+          existingExtIds.add(f.externalId);
+          nextPos++;
+        }
+        // A conclusion comment ("after the last track") follows the new end
+        // so it stays a conclusion instead of drifting into the interior.
+        if (added.length > 0 && maxPos >= 0) {
+          const newMax = nextPos - 1;
+          if (newMax !== maxPos) {
+            for (const g of data.gapComments) {
+              if (g.playlistId === playlistId && g.afterSourcePosition === maxPos) {
+                g.afterSourcePosition = newMax;
+                g.updatedAt = now;
+              }
+            }
+          }
+        }
+      }
+
+      // Tracks kept locally but gone from YouTube (signal only — never deleted).
+      const removedFromSource = existingRefs
+        .filter((t) => {
+          const ext = extByResource.get(t.id);
+          return ext ? !freshIds.has(ext) : false;
+        })
+        .map((t) => ({ ...t }));
+
+      const allTracks: MusicResource[] = Array.isArray((playlist as any).tracks)
+        ? (playlist as any).tracks
+        : [];
+      playlist.trackCount = allTracks.length;
+      playlist.subtitle = `${allTracks.length} tracks`;
+      playlist.durationSeconds = allTracks.reduce((acc, t) => acc + (t.durationSeconds || 0), 0);
+      playlist.updatedAt = now;
+
+      return { added, updatedCount, removedFromSource, total: allTracks.length, reorderApplied, reorderSkipped };
     });
   }
 
