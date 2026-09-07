@@ -1,7 +1,7 @@
 "use client";
 // src/app/page.tsx — Racine : page d'accueil (/)
 
-import React, { useState, useEffect, Suspense } from "react";
+import React, { useState, useEffect, useMemo, useCallback, Suspense } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { MusicShare } from "@/types";
@@ -32,34 +32,43 @@ function HomeFeed() {
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<"all" | "tracks" | "playlists">("all");
 
-  const fetchShares = async () => {
-    setLoading(true);
-    try {
-      const res = await fetch("/api/shares");
-      if (res.ok) {
-        const data = await res.json();
-        setShares(data.shares || []);
-      }
-    } catch (e) {
-      console.error(e);
-    } finally {
-      setLoading(false);
-    }
-  };
-
   useEffect(() => {
-    fetchShares();
+    const controller = new AbortController();
+    const load = async () => {
+      setLoading(true);
+      try {
+        const res = await fetch("/api/shares", { signal: controller.signal });
+        if (res.ok) {
+          const data = await res.json();
+          setShares(data.shares || []);
+        }
+      } catch (e: any) {
+        if (e?.name !== "AbortError") console.error(e);
+      } finally {
+        setLoading(false);
+      }
+    };
+    load();
+    return () => controller.abort();
   }, []);
 
-  const filteredShares = shares.filter((s) => {
-    if (activeTab === "tracks" && s.resource?.type !== "track") return false;
-    if (activeTab === "playlists" && s.resource?.type !== "playlist") return false;
-    if (activeTag) {
-      const tags = (s.tags || []).map((t) => t.toLowerCase().replace(/^#/, ""));
-      if (!tags.includes(activeTag)) return false;
-    }
-    return true;
-  });
+  const handleDeleted = useCallback((id: string) => {
+    setShares((prev) => prev.filter((s) => s.id !== id));
+  }, []);
+
+  const filteredShares = useMemo(
+    () =>
+      shares.filter((s) => {
+        if (activeTab === "tracks" && s.resource?.type !== "track") return false;
+        if (activeTab === "playlists" && s.resource?.type !== "playlist") return false;
+        if (activeTag) {
+          const tags = (s.tags || []).map((t) => t.toLowerCase().replace(/^#/, ""));
+          if (!tags.includes(activeTag)) return false;
+        }
+        return true;
+      }),
+    [shares, activeTab, activeTag]
+  );
 
   return (
     <div className="space-y-8 animate-in fade-in">
@@ -176,7 +185,7 @@ function HomeFeed() {
             <ShareCard
               key={share.id}
               share={share}
-              onDeleted={(id) => setShares((prev) => prev.filter((s) => s.id !== id))}
+              onDeleted={handleDeleted}
             />
           ))
         )}

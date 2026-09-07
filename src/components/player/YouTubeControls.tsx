@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState } from "react";
-import { usePlayer } from "../providers/PlayerProvider";
+import { usePlayerProgress, usePlayerState } from "../providers/PlayerProvider";
 import { formatTime } from "@/lib/utils";
 import {
   Play,
@@ -34,8 +34,6 @@ export function YouTubeControls({
 }: YouTubeControlsProps) {
   const {
     isPlaying,
-    currentTime,
-    duration,
     volume,
     activeCommentTime,
     seekTo,
@@ -45,7 +43,8 @@ export function YouTubeControls({
     previous,
     queue,
     setVolume,
-  } = usePlayer();
+  } = usePlayerState();
+  const { currentTime, duration } = usePlayerProgress();
 
   const [isMuted, setIsMuted] = useState(false);
   const progressPercent = duration > 0 ? (currentTime / duration) * 100 : 0;

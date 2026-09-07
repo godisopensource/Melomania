@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useEffect, useRef, useState } from "react";
-import { usePlayer } from "../providers/PlayerProvider";
+import { usePlayerProgress, usePlayerState } from "../providers/PlayerProvider";
 import { ChevronDown, AudioLines, ExternalLink } from "lucide-react";
 import { ensureYouTubeApi, useIsLeader } from "./player-leader";
 
@@ -28,14 +28,14 @@ export function YouTubeVideo({
   const {
     youtubeId,
     isPlaying,
-    currentTime,
     volume,
     seekTo,
     syncProgress,
     next,
     setPlayerInstance,
     pausedAt,
-  } = usePlayer();
+  } = usePlayerState();
+  const { currentTime } = usePlayerProgress();
 
   const instanceId = useRef(`ytv-${Math.random().toString(36).slice(2, 8)}`);
   const isLeader = useIsLeader(instanceId.current);
@@ -57,35 +57,66 @@ export function YouTubeVideo({
   const timeRef = useRef(currentTime);
   timeRef.current = currentTime;
 
+  // Lazy API: only the leader with something to play downloads the
+  // ~500KB IFrame API + player. Idle pages mount no YouTube code at all.
   useEffect(() => {
-    ensureYouTubeApi(() => setIsApiLoaded(true));
-  }, []);
+    if (!isLeader || !activeVideoId) return;
+    let cancelled = false;
+    ensureYouTubeApi(() => {
+      if (!cancelled) setIsApiLoaded(true);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [isLeader, activeVideoId]);
 
-  useEffect(() => {
-    if (!isLeader) {
-      if (playerRef.current && typeof playerRef.current.destroy === "function") {
-        try {
-          playerRef.current.destroy();
-        } catch (e) {}
-        playerRef.current = null;
-      }
-      return;
-    }
-    if (!isApiLoaded || !iframeContainerRef.current || !activeVideoId) {
-      if (!activeVideoId && playerRef.current && typeof playerRef.current.destroy === "function") {
-        try {
-          playerRef.current.destroy();
-        } catch (e) {}
-        playerRef.current = null;
-      }
-      return;
-    }
-
+  const destroyPlayer = () => {
     if (playerRef.current && typeof playerRef.current.destroy === "function") {
       try {
         playerRef.current.destroy();
       } catch (e) {}
+      playerRef.current = null;
     }
+  };
+
+  useEffect(() => {
+    if (!isLeader) {
+      destroyPlayer();
+      return;
+    }
+    if (!isApiLoaded || !iframeContainerRef.current || !activeVideoId) {
+      if (!activeVideoId) destroyPlayer();
+      return;
+    }
+
+    const startAt =
+      pausedAt !== null
+        ? pausedAt
+        : timeRef.current > 2
+          ? Math.floor(timeRef.current)
+          : 0;
+
+    // Reuse the live player across tracks: loadVideoById swaps the video
+    // without tearing down + rebuilding the iframe (much cheaper, no
+    // black flash, keeps the JS bridge warm).
+    if (playerRef.current && typeof playerRef.current.loadVideoById === "function") {
+      try {
+        if (isPlaying) {
+          playerRef.current.loadVideoById({ videoId: activeVideoId, startSeconds: startAt });
+        } else {
+          playerRef.current.cueVideoById({ videoId: activeVideoId, startSeconds: startAt });
+        }
+        if (typeof playerRef.current.setVolume === "function") {
+          playerRef.current.setVolume(volume);
+        }
+        setPlayerInstance(playerRef.current);
+        return;
+      } catch (e) {
+        destroyPlayer();
+      }
+    }
+
+    destroyPlayer();
 
     const playerId = `yt-player-${Math.random().toString(36).substr(2, 6)}`;
     const placeholder = document.createElement("div");
@@ -132,14 +163,22 @@ export function YouTubeVideo({
       console.warn("YouTube player init warning:", err);
     }
 
+    // NOTE: no effect cleanup destroying the player here on purpose — the
+    // instance is intentionally reused across tracks (load/cueVideoById).
+    // Teardown happens on unmount, on leader loss, or when the queue empties.
+  }, [isApiLoaded, activeVideoId, pausedAt, isLeader]);
+
+  // Unmount-only teardown (StrictMode-safe: destroys nothing if never created).
+  useEffect(() => {
     return () => {
       if (playerRef.current && typeof playerRef.current.destroy === "function") {
         try {
           playerRef.current.destroy();
         } catch (e) {}
+        playerRef.current = null;
       }
     };
-  }, [isApiLoaded, activeVideoId, pausedAt, isLeader]);
+  }, []);
 
   useEffect(() => {
     let interval: NodeJS.Timeout;

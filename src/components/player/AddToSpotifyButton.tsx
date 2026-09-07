@@ -10,7 +10,7 @@
 
 import React, { useEffect, useState } from "react";
 import { ListMusic, Loader2, CheckCircle2, AlertTriangle, Plus, X, ExternalLink } from "lucide-react";
-import { usePlayer } from "../providers/PlayerProvider";
+import { usePlayerState } from "../providers/PlayerProvider";
 
 interface SpotifyHit {
   uri: string;
@@ -30,7 +30,7 @@ interface SpotifyPlaylist {
 }
 
 export function AddToSpotifyButton({ className = "" }: { className?: string }) {
-  const { currentTrack } = usePlayer();
+  const { currentTrack } = usePlayerState();
   const [isConnected, setIsConnected] = useState<boolean | null>(null);
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);

@@ -2,7 +2,7 @@
 import React, { useState } from "react";
 import { Send, Loader2, Clock } from "lucide-react";
 import { MentionInput } from "../comments/MentionInput";
-import { usePlayer } from "../providers/PlayerProvider";
+import { usePlayerProgress } from "../providers/PlayerProvider";
 import { formatTime } from "@/lib/utils";
 
 interface TrackReplyComposerProps {
@@ -13,7 +13,7 @@ interface TrackReplyComposerProps {
 
 /** Thread reply: @ mentions, #tags + timecodes supported. */
 export function TrackReplyComposer({ trackId, parentNoteId, onPosted }: TrackReplyComposerProps) {
-  const { currentTime } = usePlayer();
+  const { currentTime } = usePlayerProgress();
   const [body, setBody] = useState("");
   const [pinTime, setPinTime] = useState(false);
   const [sending, setSending] = useState(false);

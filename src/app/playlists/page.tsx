@@ -4,7 +4,7 @@
 import React, { useState, useEffect } from "react";
 import Link from "next/link";
 import { MusicResource, MusicShare } from "@/types";
-import { usePlayer } from "@/components/providers/PlayerProvider";
+import { usePlayerState } from "@/components/providers/PlayerProvider";
 import { ExportModal } from "@/components/export/ExportModal";
 import {
   PlaylistPrivacyManager,
@@ -36,7 +36,7 @@ interface PlaylistEntry {
 }
 
 export default function PlaylistsPage() {
-  const { playQueue, currentTrack, isPlaying } = usePlayer();
+  const { playQueue, currentTrack, isPlaying } = usePlayerState();
   const [entries, setEntries] = useState<PlaylistEntry[]>([]);
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);

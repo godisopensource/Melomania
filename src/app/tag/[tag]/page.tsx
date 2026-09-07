@@ -7,7 +7,7 @@ import Link from "next/link";
 import { MusicShare } from "@/types";
 import { ShareCard } from "@/components/music/ShareCard";
 import { renderRichBody } from "@/components/comments/rich-text";
-import { usePlayer } from "@/components/providers/PlayerProvider";
+import { usePlayerState } from "@/components/providers/PlayerProvider";
 import { formatRelativeDate } from "@/lib/utils";
 import {
   Tag as TagIcon,
@@ -48,7 +48,7 @@ const KIND_LABEL: Record<TagMention["kind"], string> = {
 export default function TagPage({ params }: { params: Promise<{ tag: string }> }) {
   const { tag: rawTag } = use(params);
   const tag = decodeURIComponent(rawTag).replace(/^#/, "").toLowerCase();
-  const { seekTo } = usePlayer();
+  const { seekTo } = usePlayerState();
 
   const [shares, setShares] = useState<MusicShare[]>([]);
   const [mentions, setMentions] = useState<TagMention[]>([]);

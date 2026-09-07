@@ -19,23 +19,45 @@ import {
   Tag as TagIcon,
 } from "lucide-react";
 
+// Module-level cache: tags load once per session, not on every navigation.
+let cachedTags: { tag: string; count: number }[] | null = null;
+let tagsPromise: Promise<{ tag: string; count: number }[]> | null = null;
+
+function loadTopTags(): Promise<{ tag: string; count: number }[]> {
+  if (cachedTags) return Promise.resolve(cachedTags);
+  if (!tagsPromise) {
+    tagsPromise = fetch("/api/tags?limit=12")
+      .then((res) => (res.ok ? res.json() : { tags: [] }))
+      .then((data) => {
+        cachedTags = data.tags || [];
+        return cachedTags as { tag: string; count: number }[];
+      })
+      .catch(() => [] as { tag: string; count: number }[])
+      .finally(() => {
+        tagsPromise = null;
+      }) as Promise<{ tag: string; count: number }[]>;
+  }
+  return tagsPromise;
+}
+
 export function Sidebar() {
   const pathname = usePathname();
   const { user } = useAuth();
-  const [topTags, setTopTags] = useState<{ tag: string; count: number }[]>([]);
+  const [topTags, setTopTags] = useState<{ tag: string; count: number }[]>(cachedTags ?? []);
 
   useEffect(() => {
-    const load = async () => {
-      try {
-        const res = await fetch("/api/tags?limit=12");
-        if (res.ok) {
-          const data = await res.json();
-          setTopTags(data.tags || []);
-        }
-      } catch {}
+    if (cachedTags) {
+      setTopTags(cachedTags);
+      return;
+    }
+    let cancelled = false;
+    loadTopTags().then((tags) => {
+      if (!cancelled) setTopTags(tags);
+    });
+    return () => {
+      cancelled = true;
     };
-    load();
-  }, [pathname]);
+  }, []);
 
   const navItems = [
     { label: "Activity feed", href: "/", icon: Flame },
@@ -144,6 +166,8 @@ export function Sidebar() {
             <img
               src={user.avatarUrl}
               alt=""
+              loading="lazy"
+              decoding="async"
               className="h-8 w-8 rounded-md object-cover ring-1 ring-border"
             />
             <div className="truncate">

@@ -1,8 +1,8 @@
 "use client";
-import React, { useMemo, useState } from "react";
+import React, { memo, useMemo, useState } from "react";
 import { Plus, AlertTriangle } from "lucide-react";
 import { GapComment, MusicResource, PlaylistCategory } from "@/types";
-import { TrackCoverCard } from "./TrackCoverCard";
+import { TrackCoverItem } from "./TrackCoverCard";
 import { CategoryContainer } from "./CategoryContainer";
 import { GapCommentBubble } from "./GapCommentBubble";
 import { GapCommentComposer } from "./GapCommentComposer";
@@ -29,6 +29,7 @@ interface CuratorFlowProps {
 }
 
 const UNCATEGORIZED_COLOR = "#8A8F98";
+const EMPTY_GAPS: GapComment[] = [];
 
 interface Block {
   key: string;
@@ -42,7 +43,7 @@ interface Block {
  * loose tracks gather in an "Unclassified" container with manual assignment.
  * Gap comments slip between tracks.
  */
-export function CuratorFlow({
+export const CuratorFlow = memo(function CuratorFlow({
   tracks,
   categories,
   gapComments,
@@ -83,7 +84,16 @@ export function CuratorFlow({
     return out;
   }, [ordered]);
 
-  const gapsAt = (pos: number) => gapComments.filter((g) => g.afterSourcePosition === pos);
+  const gapsByPos = useMemo(() => {
+    const map = new Map<number, GapComment[]>();
+    for (const g of gapComments) {
+      const list = map.get(g.afterSourcePosition) ?? [];
+      list.push(g);
+      map.set(g.afterSourcePosition, list);
+    }
+    return map;
+  }, [gapComments]);
+  const gapsAt = (pos: number) => gapsByPos.get(pos) ?? EMPTY_GAPS;
   const catOf = (id: string | null) => categories.find((c) => c.id === id) ?? null;
   const trackCount = ordered.length;
   const outroPos = Math.max(0, trackCount - 1);
@@ -287,14 +297,14 @@ export function CuratorFlow({
                 <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
                   {block.tracks.map((t) => (
                     <div key={t.id} className="space-y-1.5">
-                      <TrackCoverCard
+                      <TrackCoverItem
                         track={t}
                         categoryColor={UNCATEGORIZED_COLOR}
                         isActive={activeTrackId === t.id}
                         isPlaying={isPlaying}
                         isHighlighted={hoveredTrackId === t.id || selectedTrackId === t.id}
-                        onSelect={() => onSelect(t)}
-                        onPlay={() => onPlay(t)}
+                        onSelect={onSelect}
+                        onPlay={onPlay}
                         onHover={onHover}
                       />
                       {isOwner && (
@@ -345,4 +355,4 @@ export function CuratorFlow({
       )}
     </div>
   );
-}
+});

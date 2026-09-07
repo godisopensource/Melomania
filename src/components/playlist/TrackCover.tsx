@@ -1,15 +1,31 @@
 "use client";
 import React, { useEffect, useMemo, useState } from "react";
 
-/** Best-effort quality chain for YouTube thumbnails: maxres → sd → hq. */
-function upgradeChain(url?: string): string[] {
-  if (!url) return [];
-  const m = url.match(/^(https?:\/\/i\.ytimg\.com\/vi\/([^/]+)\/)([^?#]+)/);
-  if (!m) return [url];
+/**
+ * Resolve the cheapest reliable YouTube thumbnail.
+ * hqdefault (480x360) always exists and is plenty for sleeves / cards /
+ * the Now Playing panel (all rendered <= 420px wide). maxres (1280px)
+ * 404s on most videos and costs ~6x the bytes + decode time on mobile,
+ * so it is never requested by default.
+ */
+function pickInitial(url?: string, eager?: boolean): string | null {
+  if (!url) return null;
+  const m = url.match(/^(https?:\/\/i\.ytimg\.com\/vi\/([^/]+)\/).*$/);
+  if (!m) return url;
   const base = m[1];
-  const chain = [`${base}maxresdefault.jpg`, `${base}sddefault.jpg`, `${base}hqdefault.jpg`];
-  if (!chain.includes(url)) chain.push(url);
-  return [...new Set(chain)];
+  // Eager hero art: try sd (640px) first, fall back to hq on error.
+  // Lazy art: hq directly — zero fallback requests in the common path.
+  return eager ? `${base}sddefault.jpg` : `${base}hqdefault.jpg`;
+}
+
+function fallbackFor(current: string): string | null {
+  const m = current.match(/^(https?:\/\/i\.ytimg\.com\/vi\/([^/]+)\/)([^?#]+)$/);
+  if (!m) return null;
+  const base = m[1];
+  const file = m[3];
+  if (file === "sddefault.jpg") return `${base}hqdefault.jpg`;
+  if (file === "hqdefault.jpg") return `${base}mqdefault.jpg`;
+  return null;
 }
 
 interface TrackCoverProps {
@@ -20,20 +36,18 @@ interface TrackCoverProps {
 }
 
 /**
- * Cover art that always tries the best YouTube resolution first
- * (maxres 1280px) and steps down on error. Non-YouTube URLs pass through.
- * (Quality remains bounded by what YouTube exposes per video.)
+ * Cover art with bounded cost: at most 2 small requests (sd→hq for eager
+ * heroes, single hq for everything else), lazy + async decode off-screen.
  */
 export function TrackCover({ src, alt, className = "", eager = false }: TrackCoverProps) {
-  const chain = useMemo(() => upgradeChain(src), [src]);
-  const [step, setStep] = useState(0);
+  const initial = useMemo(() => pickInitial(src, eager), [src, eager]);
+  const [current, setCurrent] = useState<string | null>(initial);
 
   useEffect(() => {
-    setStep(0);
-  }, [src]);
+    setCurrent(pickInitial(src, eager));
+  }, [src, eager]);
 
-  if (chain.length === 0) return null;
-  const current = chain[Math.min(step, chain.length - 1)];
+  if (!current) return null;
 
   return (
     // eslint-disable-next-line @next/next/no-img-element
@@ -41,8 +55,17 @@ export function TrackCover({ src, alt, className = "", eager = false }: TrackCov
       src={current}
       alt={alt}
       loading={eager ? "eager" : "lazy"}
+      decoding="async"
+      fetchPriority={eager ? "high" : "auto"}
       draggable={false}
-      onError={() => setStep((s) => Math.min(s + 1, chain.length - 1))}
+      onError={() => {
+        setCurrent((prev) => {
+          if (!prev) return prev;
+          // Never loop back to the original oversized URL: only step down.
+          const next = fallbackFor(prev);
+          return next ?? prev;
+        });
+      }}
       className={className}
     />
   );

@@ -1,7 +1,7 @@
 "use client";
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { memo, useEffect, useMemo, useRef, useState } from "react";
 import { Loader2, MicVocal } from "lucide-react";
-import { usePlayer } from "../providers/PlayerProvider";
+import { usePlayerProgress } from "../providers/PlayerProvider";
 import { cn } from "@/lib/utils";
 
 interface LyricLine {
@@ -52,9 +52,24 @@ function parseLRC(raw: string): LyricLine[] {
 /**
  * Synchronized lyrics (LRCLIB, free, no key). Synced lines highlight
  * in real time; falls back to plain text when no timings exist.
+ *
+ * Perf: results are cached per track in-memory (reopening the overlay or
+ * revisiting a track never refetches), in-flight requests are aborted on
+ * track change, active-line lookup is a binary search, and auto-scroll
+ * uses instant jumps (smooth scrolling every line janks on mobile).
  */
-export function SyncedLyrics({ artist, title, album, durationSeconds, overlay = false }: SyncedLyricsProps) {
-  const { currentTime } = usePlayer();
+type LyricsResult =
+  | { kind: "synced"; lines: LyricLine[] }
+  | { kind: "plain"; text: string }
+  | { kind: "empty" };
+
+const lyricsCache = new Map<string, Promise<LyricsResult>>();
+
+function cacheKey(artist: string, title: string, album?: string, durationSeconds?: number) {
+  return `${cleanArtist(artist).toLowerCase()}::${cleanTitle(title).toLowerCase()}::${album ?? ""}::${durationSeconds ? Math.round(durationSeconds) : ""}`;
+}
+export const SyncedLyrics = memo(function SyncedLyrics({ artist, title, album, durationSeconds, overlay = false }: SyncedLyricsProps) {
+  const { currentTime } = usePlayerProgress();
   const [lines, setLines] = useState<LyricLine[] | null>(null);
   const [plain, setPlain] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -63,6 +78,8 @@ export function SyncedLyrics({ artist, title, album, durationSeconds, overlay = 
 
   useEffect(() => {
     let cancelled = false;
+    const controller = new AbortController();
+    const signal = controller.signal;
     const load = async () => {
       // Guard: without artist/title there is nothing to search — fail fast
       // instead of leaving the panel in a perpetual loading state.
@@ -78,79 +95,97 @@ export function SyncedLyrics({ artist, title, album, durationSeconds, overlay = 
       setLines(null);
       setPlain(null);
       try {
-        const artistVariants = [...new Set([cleanArtist(artist), artist.trim()])].filter(Boolean);
-        const titleVariants = [...new Set([cleanTitle(title), title.trim()])].filter(Boolean);
-        let synced: string | null = null;
-        let plainText: string | null = null;
+        const key = cacheKey(artist, title, album, durationSeconds);
+        let pending = lyricsCache.get(key);
+        if (!pending) {
+          pending = (async (): Promise<LyricsResult> => {
+            const artistVariants = [...new Set([cleanArtist(artist), artist.trim()])].filter(Boolean);
+            const titleVariants = [...new Set([cleanTitle(title), title.trim()])].filter(Boolean);
+            let synced: string | null = null;
+            let plainText: string | null = null;
 
-        const tryGet = async (a: string, t: string): Promise<boolean> => {
-          const params = new URLSearchParams({
-            artist_name: a,
-            track_name: t,
-            ...(album ? { album_name: album } : {}),
-            ...(durationSeconds ? { duration: String(Math.round(durationSeconds)) } : {}),
+            const tryGet = async (a: string, t: string): Promise<boolean> => {
+              const params = new URLSearchParams({
+                artist_name: a,
+                track_name: t,
+                ...(album ? { album_name: album } : {}),
+                ...(durationSeconds ? { duration: String(Math.round(durationSeconds)) } : {}),
+              });
+              try {
+                const res = await fetch(`https://lrclib.net/api/get?${params.toString()}`, { signal });
+                if (!res.ok) return false;
+                const data = await res.json();
+                if (data.syncedLyrics || data.plainLyrics) {
+                  synced = data.syncedLyrics || null;
+                  plainText = data.plainLyrics || null;
+                  return true;
+                }
+              } catch (e: any) {
+                if (e?.name === "AbortError") throw e;
+              }
+              return false;
+            };
+
+            const trySearch = async (a: string, t: string): Promise<boolean> => {
+              try {
+                const searchParams = new URLSearchParams({ track_name: t, artist_name: a });
+                const res = await fetch(`https://lrclib.net/api/search?${searchParams.toString()}`, { signal });
+                if (!res.ok) return false;
+                const results = await res.json();
+                const first = Array.isArray(results) ? results[0] : null;
+                if (first && (first.syncedLyrics || first.plainLyrics)) {
+                  synced = first.syncedLyrics || null;
+                  plainText = first.plainLyrics || null;
+                  return true;
+                }
+              } catch (e: any) {
+                if (e?.name === "AbortError") throw e;
+              }
+              return false;
+            };
+
+            const findLyrics = async (): Promise<boolean> => {
+              for (const a of artistVariants) {
+                for (const t of titleVariants) {
+                  if (await tryGet(a, t)) return true;
+                }
+              }
+              for (const a of artistVariants) {
+                for (const t of titleVariants) {
+                  if (await trySearch(a, t)) return true;
+                }
+              }
+              return false;
+            };
+            const found = await findLyrics();
+            if (!found) {
+              console.warn(
+                `[Lyrics] nothing found for "${artist}" — "${title}" (tried: ${artistVariants.join("|")} / ${titleVariants.join("|")})`
+              );
+              return { kind: "empty" } as LyricsResult;
+            }
+            if (synced) {
+              const parsed = parseLRC(synced);
+              if (parsed.length > 0) return { kind: "synced", lines: parsed } as LyricsResult;
+              if (plainText) return { kind: "plain", text: plainText } as LyricsResult;
+              return { kind: "empty" } as LyricsResult;
+            }
+            if (plainText) return { kind: "plain", text: plainText } as LyricsResult;
+            return { kind: "empty" } as LyricsResult;
+          })();
+          lyricsCache.set(key, pending);
+          // Don't let a rejection poison the cache forever.
+          pending.catch(() => {
+            if (lyricsCache.get(key) === pending) lyricsCache.delete(key);
           });
-          try {
-            const res = await fetch(`https://lrclib.net/api/get?${params.toString()}`);
-            if (!res.ok) return false;
-            const data = await res.json();
-            if (data.syncedLyrics || data.plainLyrics) {
-              synced = data.syncedLyrics || null;
-              plainText = data.plainLyrics || null;
-              return true;
-            }
-          } catch {}
-          return false;
-        };
-
-        const trySearch = async (a: string, t: string): Promise<boolean> => {
-          try {
-            const searchParams = new URLSearchParams({ track_name: t, artist_name: a });
-            const res = await fetch(`https://lrclib.net/api/search?${searchParams.toString()}`);
-            if (!res.ok) return false;
-            const results = await res.json();
-            const first = Array.isArray(results) ? results[0] : null;
-            if (first && (first.syncedLyrics || first.plainLyrics)) {
-              synced = first.syncedLyrics || null;
-              plainText = first.plainLyrics || null;
-              return true;
-            }
-          } catch {}
-          return false;
-        };
-
-        let found = false;
-        const findLyrics = async (): Promise<boolean> => {
-          for (const a of artistVariants) {
-            for (const t of titleVariants) {
-              if (await tryGet(a, t)) return true;
-            }
-          }
-          for (const a of artistVariants) {
-            for (const t of titleVariants) {
-              if (await trySearch(a, t)) return true;
-            }
-          }
-          return false;
-        };
-        found = await findLyrics();
-        if (!found) {
-          console.warn(
-            `[Lyrics] nothing found for "${artist}" — "${title}" (tried: ${artistVariants.join("|")} / ${titleVariants.join("|")})`
-          );
         }
+        const result = await pending;
         if (cancelled) return;
-        if (synced) {
-          const parsed = parseLRC(synced);
-          if (parsed.length > 0) setLines(parsed);
-          else if (plainText) setPlain(plainText);
-          else setError("No lyrics found for this track.");
-        } else if (plainText) {
-          setPlain(plainText);
-        } else {
-          setError("No lyrics found for this track.");
-        }
-      } catch {
+        if (result.kind === "synced") setLines(result.lines);
+        else if (result.kind === "plain") setPlain(result.text);
+        else setError("No lyrics found for this track.");
+      } catch (e: any) {
+        if (e?.name === "AbortError" || cancelled) return;
         if (!cancelled) setError("Could not load lyrics.");
       } finally {
         if (!cancelled) setLoading(false);
@@ -159,15 +194,25 @@ export function SyncedLyrics({ artist, title, album, durationSeconds, overlay = 
     load();
     return () => {
       cancelled = true;
+      controller.abort();
     };
   }, [artist, title, album, durationSeconds]);
 
   const activeIdx = useMemo(() => {
     if (!lines) return -1;
+    // Binary search: last line with time <= currentTime + 0.3.
+    const target = currentTime + 0.3;
+    let lo = 0;
+    let hi = lines.length - 1;
     let idx = -1;
-    for (let i = 0; i < lines.length; i++) {
-      if (lines[i].time <= currentTime + 0.3) idx = i;
-      else break;
+    while (lo <= hi) {
+      const mid = (lo + hi) >> 1;
+      if (lines[mid].time <= target) {
+        idx = mid;
+        lo = mid + 1;
+      } else {
+        hi = mid - 1;
+      }
     }
     return idx;
   }, [lines, currentTime]);
@@ -177,10 +222,14 @@ export function SyncedLyrics({ artist, title, album, durationSeconds, overlay = 
     const container = scroller.current;
     const el = container?.querySelector<HTMLElement>(`[data-line="${activeIdx}"]`);
     if (container && el) {
-      container.scrollTo({
-        top: Math.max(0, el.offsetTop - container.clientHeight / 2 + el.clientHeight / 2),
-        behavior: "smooth",
-      });
+      // Instant jump: smooth-scrolling on every line change janks on mobile.
+      const top = el.offsetTop - container.clientHeight / 2 + el.clientHeight / 2;
+      const delta = Math.abs(container.scrollTop - Math.max(0, top));
+      // Only scroll when the active line drifted out of the middle band —
+      // avoids fighting the user when they scroll manually.
+      if (delta > container.clientHeight * 0.35) {
+        container.scrollTo({ top: Math.max(0, top), behavior: "auto" });
+      }
     }
   }, [activeIdx]);
 
@@ -242,4 +291,4 @@ export function SyncedLyrics({ artist, title, album, durationSeconds, overlay = 
       )}
     </div>
   );
-}
+});

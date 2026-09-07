@@ -4,7 +4,7 @@ import { Disc3, Hash, Tag as TagIcon, Clock3, ListMusic, Clapperboard, X, Mic } 
 import { MusicResource, PlaylistCategory, EmotionalCriterion } from "@/types";
 import { formatTime } from "@/lib/utils";
 import { moodLabel, softnessLabel } from "@/lib/curves";
-import { usePlayer } from "../providers/PlayerProvider";
+import { usePlayerProgress, usePlayerState } from "../providers/PlayerProvider";
 import { YouTubeVideo } from "../player/YouTubeVideo";
 import { YouTubeControls } from "../player/YouTubeControls";
 import { TrackNoteThread } from "./TrackNoteThread";
@@ -19,13 +19,26 @@ interface ActiveTrackPanelProps {
 }
 
 /**
+ * Isolated 1Hz time label: only this span re-renders on progress ticks,
+ * not the whole Now Playing panel (cover, thread, lyrics stay static).
+ */
+function LiveTimeLabel({ fallbackDuration }: { fallbackDuration?: number }) {
+  const { currentTime, duration } = usePlayerProgress();
+  return (
+    <span>
+      {formatTime(currentTime)} / {formatTime(fallbackDuration || duration)}
+    </span>
+  );
+}
+
+/**
  * Now Playing: one merged card (cover or clip on top, identity,
  * centered player below), then the track's editorial thread.
  * Opening the clip swaps the cover art for the video; closing it
  * returns to the cover while the audio keeps playing.
  */
 export function ActiveTrackPanel({ track, playlistId, categories, criteria = [] }: ActiveTrackPanelProps) {
-  const { currentTrack: playing, currentTime, duration, playTrack } = usePlayer();
+  const { currentTrack: playing, playTrack } = usePlayerState();
   const [videoOpen, setVideoOpen] = useState(false);
   // Open by default so the "Loading lyrics…" state is visible right away.
   // (The fetch itself was previously blocked by the CSP: lrclib.net was
@@ -161,7 +174,7 @@ export function ActiveTrackPanel({ track, playlistId, categories, criteria = [] 
             )}
             <span className="inline-flex items-center gap-1 font-mono">
               <Clock3 className="h-3 w-3" aria-hidden="true" />
-              {formatTime(currentTime)} / {formatTime(track.durationSeconds || duration)}
+              <LiveTimeLabel fallbackDuration={track.durationSeconds} />
             </span>
             {category && (
               <span

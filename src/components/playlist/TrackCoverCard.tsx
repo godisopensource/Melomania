@@ -1,5 +1,5 @@
 "use client";
-import React from "react";
+import React, { memo, useCallback } from "react";
 import { Play, Pause, Hash } from "lucide-react";
 import { MusicResource } from "@/types";
 import { formatTime } from "@/lib/utils";
@@ -17,8 +17,8 @@ interface TrackCoverCardProps {
   onHover: (id: string | null) => void;
 }
 
-/** Curator cover: original position badge, title/artist revealed on hover. */
-export function TrackCoverCard({ track, categoryColor, isActive, isPlaying, isHighlighted, onSelect, onPlay, onHover }: TrackCoverCardProps) {
+/** Curator cover: original position badge, title/artist revealed on hover. Memoized for cheap hover updates. */
+export const TrackCoverCard = memo(function TrackCoverCard({ track, categoryColor, isActive, isPlaying, isHighlighted, onSelect, onPlay, onHover }: TrackCoverCardProps) {
   const pos = track.sourcePosition ?? 0;
   return (
     <article
@@ -102,4 +102,44 @@ export function TrackCoverCard({ track, categoryColor, isActive, isPlaying, isHi
       </div>
     </article>
   );
-}
+});
+
+/**
+ * Per-track wrapper: builds the per-card closures inside a memoized
+ * boundary, so hovering/selecting one card doesn't re-render siblings.
+ * Parents pass their stable (track => void) handlers straight through.
+ */
+export const TrackCoverItem = memo(function TrackCoverItem({
+  track,
+  categoryColor,
+  isActive,
+  isPlaying,
+  isHighlighted,
+  onSelect,
+  onPlay,
+  onHover,
+}: {
+  track: MusicResource;
+  categoryColor?: string;
+  isActive: boolean;
+  isPlaying: boolean;
+  isHighlighted: boolean;
+  onSelect: (t: MusicResource) => void;
+  onPlay: (t: MusicResource) => void;
+  onHover: (id: string | null) => void;
+}) {
+  const handleSelect = useCallback(() => onSelect(track), [onSelect, track]);
+  const handlePlay = useCallback(() => onPlay(track), [onPlay, track]);
+  return (
+    <TrackCoverCard
+      track={track}
+      categoryColor={categoryColor}
+      isActive={isActive}
+      isPlaying={isPlaying}
+      isHighlighted={isHighlighted}
+      onSelect={handleSelect}
+      onPlay={handlePlay}
+      onHover={onHover}
+    />
+  );
+});

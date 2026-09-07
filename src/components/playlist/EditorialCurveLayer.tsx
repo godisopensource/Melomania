@@ -1,5 +1,5 @@
 "use client";
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { memo, useEffect, useMemo, useRef, useState } from "react";
 import { EmotionalCriterion, MusicResource, PlaylistCategory } from "@/types";
 import { catmullRomPath } from "@/lib/curves";
 
@@ -40,8 +40,13 @@ interface CurveDef {
  * The layer measures its own box and draws in real pixels (1 unit = 1px),
  * so circles stay round and labels undistorted at any container size.
  * `zoom` widens the drawing surface horizontally; the band scrolls.
+ *
+ * Perf notes: the SVG can hold tracks × curves points — all geometry is
+ * memoized, paths carry no per-frame SVG filters (drop-shadow on every
+ * path forces a full-layer repaint on mobile GPUs), and points avoid CSS
+ * transitions (each hover would otherwise restyle hundreds of nodes).
  */
-export function EditorialCurveLayer({
+function EditorialCurveLayerInner({
   tracks,
   categories,
   criteria,
@@ -59,19 +64,26 @@ export function EditorialCurveLayer({
   useEffect(() => {
     const el = wrapRef.current;
     if (!el) return;
+    let raf = 0;
     const update = () => {
-      const r = el.getBoundingClientRect();
-      setVp((prev) => {
+      cancelAnimationFrame(raf);
+      raf = requestAnimationFrame(() => {
+        const r = el.getBoundingClientRect();
         const w = Math.max(0, Math.round(r.width));
         const h = Math.max(0, Math.round(r.height));
-        if (prev && prev.w === w && prev.h === h) return prev;
-        return { w, h };
+        setVp((prev) => {
+          if (prev && prev.w === w && prev.h === h) return prev;
+          return { w, h };
+        });
       });
     };
     update();
     const ro = new ResizeObserver(update);
     ro.observe(el);
-    return () => ro.disconnect();
+    return () => {
+      cancelAnimationFrame(raf);
+      ro.disconnect();
+    };
   }, []);
 
   const safeZoom = Number.isFinite(zoom) && zoom > 0 ? zoom : 1;
@@ -98,31 +110,39 @@ export function EditorialCurveLayer({
     [criteria]
   );
 
-  const activeDefs = defs.filter((d) => visible[d.key] !== false);
+  const activeDefs = useMemo(() => defs.filter((d) => visible[d.key] !== false), [defs, visible]);
 
-  const colorFor = (track: MusicResource): string =>
-    categories.find((c) => c.id === track.categoryId)?.color ?? "#8A8F98";
+  const catColorOf = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const c of categories) map.set(c.id, c.color);
+    return (track: MusicResource): string => {
+      if (track.categoryId && map.has(track.categoryId)) return map.get(track.categoryId)!;
+      return "#8A8F98";
+    };
+  }, [categories]);
 
-  const xFor = (pos: number): number => {
-    if (ordered.length <= 1 || W <= 0) return W / 2;
-    return PAD_X + (pos / Math.max(1, ordered.length - 1)) * (W - PAD_X * 2);
-  };
-  const yFor = (score: number | null | undefined): number => {
-    const s = score === null || score === undefined ? 50 : Math.max(0, Math.min(100, score));
-    return TOP + BAND - (s / 100) * BAND;
-  };
-
-  const curves = activeDefs.map((def) => {
-    const pts = ordered.map((t) => ({
-      x: xFor(t.sourcePosition ?? 0),
-      y: yFor(def.get(t)) + def.offset,
-      trackId: t.id,
-      sourcePosition: t.sourcePosition ?? 0,
-      value: def.get(t) ?? null,
-      ring: colorFor(t),
-    }));
-    return { def, pts, path: catmullRomPath(pts) };
-  });
+  const curves = useMemo(() => {
+    if (W <= 0 || H <= 0) return [];
+    const xFor = (pos: number): number => {
+      if (ordered.length <= 1) return W / 2;
+      return PAD_X + (pos / Math.max(1, ordered.length - 1)) * (W - PAD_X * 2);
+    };
+    const yFor = (score: number | null | undefined): number => {
+      const s = score === null || score === undefined ? 50 : Math.max(0, Math.min(100, score));
+      return TOP + BAND - (s / 100) * BAND;
+    };
+    return activeDefs.map((def) => {
+      const pts = ordered.map((t) => ({
+        x: xFor(t.sourcePosition ?? 0),
+        y: yFor(def.get(t)) + def.offset,
+        trackId: t.id,
+        sourcePosition: t.sourcePosition ?? 0,
+        value: def.get(t) ?? null,
+        ring: catColorOf(t),
+      }));
+      return { def, pts, path: catmullRomPath(pts) };
+    });
+  }, [activeDefs, ordered, catColorOf, W, H, BAND]);
 
   return (
     <div ref={wrapRef} className="h-full w-full overflow-x-auto overflow-y-hidden">
@@ -156,8 +176,6 @@ export function EditorialCurveLayer({
             stroke={`url(#melo-curve-${def.key})`}
             strokeWidth={2.5}
             strokeLinecap="round"
-            vectorEffect="non-scaling-stroke"
-            style={{ filter: `drop-shadow(0 0 6px ${def.color}66)` }}
           />
         ) : null
       )}
@@ -178,7 +196,7 @@ export function EditorialCurveLayer({
                   strokeWidth={active ? 2.5 : 1.5}
                   strokeDasharray={missing ? "2 2" : undefined}
                   opacity={missing ? 0.8 : 1}
-                  className="cursor-pointer transition-all"
+                  className="cursor-pointer"
                   onMouseEnter={() => onPointHover(p.trackId)}
                   onMouseLeave={() => onPointHover(null)}
                   onFocus={() => onPointHover(p.trackId)}
@@ -211,3 +229,5 @@ export function EditorialCurveLayer({
     </div>
   );
 }
+
+export const EditorialCurveLayer = memo(EditorialCurveLayerInner);

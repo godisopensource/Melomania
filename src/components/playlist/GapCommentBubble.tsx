@@ -6,7 +6,7 @@ import { GapComment } from "@/types";
 import { formatRelativeDate } from "@/lib/utils";
 import { cn } from "@/lib/utils";
 import { gapAriaLabel, gapEdgeDetail, gapShortLabel, isIntroGap, isOutroGap } from "@/lib/gap-comments";
-import { usePlayer } from "../providers/PlayerProvider";
+import { usePlayerState } from "../providers/PlayerProvider";
 import { renderRichBody } from "../comments/rich-text";
 
 interface GapCommentBubbleProps {
@@ -23,7 +23,7 @@ interface GapCommentBubbleProps {
  * opens the full note in a dialog (portal — never clipped by the shelves).
  */
 export function GapCommentBubble({ gap, isOwner, onDeleted, trackCount = 0 }: GapCommentBubbleProps) {
-  const { seekTo } = usePlayer();
+  const { seekTo } = usePlayerState();
   const [open, setOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
 

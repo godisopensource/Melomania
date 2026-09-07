@@ -8,15 +8,18 @@ import { MobileNav } from "./MobileNav";
 import { AuthModal } from "./AuthModal";
 import { OnboardingModal } from "./OnboardingModal";
 import { YouTubePlayer } from "../player/YouTubePlayer";
-import { usePlayer } from "../providers/PlayerProvider";
+import { usePlayerState } from "../providers/PlayerProvider";
 import { Disc } from "lucide-react";
 
 export function AppLayout({ children }: { children: React.ReactNode }) {
-  const { currentTrack } = usePlayer();
+  const { currentTrack, youtubeId } = usePlayerState();
   const pathname = usePathname();
   // The playlist space (Curator / Vinyl) owns its Now Playing panel,
   // so it gets the full width without the generic aside.
   const isPlaylistWorkspace = pathname?.startsWith("/playlists/") && pathname !== "/playlists";
+  // No YouTube code mounts until something is actually queued: idle pages
+  // (landing, playlists index) download no IFrame API and own no iframe.
+  const hasPlayback = !!currentTrack || !!youtubeId;
 
   return (
     <div className="min-h-screen bg-background text-foreground flex flex-col selection:bg-brand-500/30">
@@ -41,7 +44,9 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
                 </span>
               </div>
 
-              <YouTubePlayer compact />
+              {hasPlayback ? (
+                <YouTubePlayer compact />
+              ) : null}
 
               {currentTrack ? (
                 <div className="rounded-xl border border-border bg-black/40 p-3.5 space-y-2">
@@ -50,6 +55,8 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
                     <img
                       src={currentTrack.coverImageUrl}
                       alt=""
+                      loading="lazy"
+                      decoding="async"
                       className="h-10 w-10 rounded-md object-cover ring-1 ring-border"
                     />
                     <div className="overflow-hidden">

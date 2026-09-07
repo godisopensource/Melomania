@@ -1,10 +1,10 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { memo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { MusicShare } from "@/types";
-import { usePlayer } from "../providers/PlayerProvider";
+import { usePlayerState } from "../providers/PlayerProvider";
 import { useAuth } from "../providers/AuthProvider";
 import { formatTime, formatRelativeDate } from "@/lib/utils";
 import { ExportModal } from "../export/ExportModal";
@@ -27,9 +27,9 @@ interface ShareCardProps {
   onDeleted?: (id: string) => void;
 }
 
-export function ShareCard({ share, onDeleted }: ShareCardProps) {
+export const ShareCard = memo(function ShareCard({ share, onDeleted }: ShareCardProps) {
   const router = useRouter();
-  const { currentTrack, isPlaying, playTrack, togglePlay } = usePlayer();
+  const { currentTrack, isPlaying, playTrack, togglePlay } = usePlayerState();
   const { user } = useAuth();
   const [exportOpen, setExportOpen] = useState(false);
   const [likes, setLikes] = useState(share.likesCount || 0);
@@ -108,7 +108,7 @@ export function ShareCard({ share, onDeleted }: ShareCardProps) {
 
   return (
     <>
-      <article className="group relative overflow-hidden rounded-2xl border border-border bg-card/75 p-5 backdrop-blur-md transition-all hover:border-border/80 hover:shadow-lg">
+      <article className="melo-feed-card group relative overflow-hidden rounded-2xl border border-border bg-card/75 p-5 backdrop-blur-md transition-all hover:border-border/80 hover:shadow-lg">
         {/* Author Header */}
         <div className="flex items-center justify-between gap-3 mb-3.5">
           <Link
@@ -118,6 +118,8 @@ export function ShareCard({ share, onDeleted }: ShareCardProps) {
             <img
               src={share.author?.avatarUrl || "/icon.png"}
               alt=""
+              loading="lazy"
+              decoding="async"
               className="h-8 w-8 rounded-md object-cover ring-1 ring-border"
             />
             <div>
@@ -166,6 +168,8 @@ export function ShareCard({ share, onDeleted }: ShareCardProps) {
               <img
                 src={resource.coverImageUrl}
                 alt={resource.title}
+                loading="lazy"
+                decoding="async"
                 className="h-full w-full object-cover transition-transform duration-300 group-hover:scale-105"
               />
               <button
@@ -303,4 +307,4 @@ export function ShareCard({ share, onDeleted }: ShareCardProps) {
       />
     </>
   );
-}
+});

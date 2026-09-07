@@ -1,8 +1,8 @@
 "use client";
-import React, { useMemo, useState } from "react";
+import React, { memo, useMemo, useState } from "react";
 import { Loader2, Disc3, ZoomIn, ZoomOut } from "lucide-react";
 import { GapComment, MusicResource, PlaylistCategory } from "@/types";
-import { VinylRecordCard } from "./VinylRecordCard";
+import { VinylRecordItem } from "./VinylRecordCard";
 import { GapCommentBubble } from "./GapCommentBubble";
 import { EdgeGapSection } from "./EdgeGapSection";
 import { INTRO_GAP_POSITION } from "@/lib/gap-comments";
@@ -23,6 +23,7 @@ interface VinylShelfProps {
 
 const ZOOMS = [120, 148, 180, 216, 256];
 const UNCATEGORIZED_COLOR = "#8A8F98";
+const EMPTY_GAPS: GapComment[] = [];
 
 interface Run {
   key: string;
@@ -35,7 +36,7 @@ interface Run {
  * tracks grouped into labeled shelf sections. Gap comments sit between
  * sleeves with a speech icon (hover / tap to read). Zoomable.
  */
-export function VinylShelf({
+export const VinylShelf = memo(function VinylShelf({
   tracks,
   categories,
   gapComments,
@@ -71,7 +72,16 @@ export function VinylShelf({
     return out;
   }, [ordered]);
 
-  const gapsAt = (pos: number) => gapComments.filter((g) => g.afterSourcePosition === pos);
+  const gapsByPos = useMemo(() => {
+    const map = new Map<number, GapComment[]>();
+    for (const g of gapComments) {
+      const list = map.get(g.afterSourcePosition) ?? [];
+      list.push(g);
+      map.set(g.afterSourcePosition, list);
+    }
+    return map;
+  }, [gapComments]);
+  const gapsAt = (pos: number) => gapsByPos.get(pos) ?? EMPTY_GAPS;
   const catOf = (id: string | null) => categories.find((c) => c.id === id) ?? null;
   const trackCount = ordered.length;
   const outroPos = Math.max(0, trackCount - 1);
@@ -190,23 +200,21 @@ export function VinylShelf({
                 {run.tracks.map((t) => {
                   const pos = t.sourcePosition ?? 0;
                   // Gaps strictly inside the run (boundary gaps render between sections).
-                  const showGaps = pos !== end ? gapsAt(pos) : [];
+                  const showGaps = pos !== end ? gapsAt(pos) : EMPTY_GAPS;
                   return (
                     <React.Fragment key={t.id}>
-                      <div role="listitem" aria-label={`${t.title}, track ${pos + 1}`}>
-                        <VinylRecordCard
-                          track={t}
-                          index={pos}
-                          width={width}
-                          isActive={activeTrackId === t.id}
-                          isPlaying={isPlaying}
-                          isSelected={selectedTrackId === t.id}
-                          flipped={flippedId === t.id}
-                          onFlip={() => setFlippedId(flippedId === t.id ? null : t.id)}
-                          onSelect={() => onSelect(t)}
-                          onPlay={() => onPlay(t)}
-                        />
-                      </div>
+                      <VinylRecordItem
+                        track={t}
+                        index={pos}
+                        width={width}
+                        isActive={activeTrackId === t.id}
+                        isPlaying={isPlaying}
+                        isSelected={selectedTrackId === t.id}
+                        flippedId={flippedId}
+                        onFlipId={setFlippedId}
+                        onSelect={onSelect}
+                        onPlay={onPlay}
+                      />
                       {showGaps.length > 0 && (
                         <div className="flex items-center" aria-label={`Comments after track ${pos + 1}`}>
                           {showGaps.map((g) => (
@@ -249,4 +257,4 @@ export function VinylShelf({
       )}
     </section>
   );
-}
+});

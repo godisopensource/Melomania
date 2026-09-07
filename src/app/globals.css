@@ -118,6 +118,25 @@
     radial-gradient(ellipse 70% 55% at 90% 100%, hsl(var(--teal) / 0.06), transparent 60%),
     repeating-linear-gradient(0deg, hsl(0 0% 100% / 0.012) 0 1px, transparent 1px 3px);
 }
+/* Off-screen feed cards skip layout/paint until near the viewport.
+   No visual change — purely less work while scrolling. */
+.melo-feed-card {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 340px;
+}
+/* Small screens: the repeating grain scanlines repaint on every scroll
+   frame on weak GPUs — keep the warm radial tints, drop the scanlines. */
+@media (max-width: 640px) {
+  .melo-grain {
+    background-image:
+      radial-gradient(ellipse 80% 60% at 20% 0%, hsl(var(--gold) / 0.07), transparent 60%),
+      radial-gradient(ellipse 70% 55% at 90% 100%, hsl(var(--teal) / 0.06), transparent 60%);
+  }
+  /* Static sleeves on touch: no 350ms 3D transition on every tap. */
+  .melo-vinyl-card {
+    transition: none;
+  }
+}
 .melo-paper-line {
   background-image: repeating-linear-gradient(0deg, hsl(0 0% 100% / 0.05) 0 1px, transparent 1px 28px);
 }

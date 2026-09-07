@@ -4,7 +4,7 @@ import React, { useState, useEffect } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useAuth } from "../providers/AuthProvider";
-import { usePlayer } from "../providers/PlayerProvider";
+import { usePlayerState } from "../providers/PlayerProvider";
 import {
   Search,
   Bell,
@@ -20,7 +20,7 @@ import { Notification } from "@/types";
 export function Navbar() {
   const router = useRouter();
   const { user, logout, openAuthModal } = useAuth();
-  const { reset: resetPlayer } = usePlayer();
+  const { reset: resetPlayer } = usePlayerState();
 
   const [searchQuery, setSearchQuery] = useState("");
   const [searchResults, setSearchResults] = useState<{ users: any[]; tracks: any[]; playlists: any[] } | null>(null);
@@ -34,19 +34,32 @@ export function Navbar() {
 
   useEffect(() => {
     if (!user) return;
+    const controller = new AbortController();
     const fetchNotifs = async () => {
+      // No polling for hidden tabs — the badge refreshes on return.
+      if (typeof document !== "undefined" && document.hidden) return;
       try {
-        const res = await fetch("/api/notifications");
+        const res = await fetch("/api/notifications", { signal: controller.signal });
         if (res.ok) {
           const data = await res.json();
           setNotifications(data.notifications || []);
           setUnreadCount(data.unreadCount || 0);
         }
-      } catch (e) {}
+      } catch (e: any) {
+        if (e?.name === "AbortError") return;
+      }
     };
     fetchNotifs();
     const timer = setInterval(fetchNotifs, 30000);
-    return () => clearInterval(timer);
+    const onVisible = () => {
+      if (!document.hidden) fetchNotifs();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      controller.abort();
+      clearInterval(timer);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
   }, [user]);
 
   useEffect(() => {
@@ -54,17 +67,26 @@ export function Navbar() {
       setSearchResults(null);
       return;
     }
+    const controller = new AbortController();
+    // 400ms debounce + abortable: slow networks don't stack stale requests.
     const timer = setTimeout(async () => {
       try {
-        const res = await fetch(`/api/music/search?q=${encodeURIComponent(searchQuery)}`);
+        const res = await fetch(`/api/music/search?q=${encodeURIComponent(searchQuery)}`, {
+          signal: controller.signal,
+        });
         if (res.ok) {
           const data = await res.json();
           setSearchResults(data);
           setSearchOpen(true);
         }
-      } catch (e) {}
-    }, 250);
-    return () => clearTimeout(timer);
+      } catch (e: any) {
+        if (e?.name === "AbortError") return;
+      }
+    }, 400);
+    return () => {
+      controller.abort();
+      clearTimeout(timer);
+    };
   }, [searchQuery]);
 
   const notifHref = (notif: Notification): string | null => {
@@ -179,7 +201,7 @@ export function Navbar() {
                         onClick={() => setSearchOpen(false)}
                         className="flex items-center gap-2.5 rounded-lg p-1.5 hover:bg-white/5 text-xs text-foreground"
                       >
-                        <img src={p.coverImageUrl} alt="" className="h-7 w-7 rounded object-cover" />
+                        <img src={p.coverImageUrl} alt="" loading="lazy" decoding="async" className="h-7 w-7 rounded object-cover" />
                         <div className="truncate">
                           <p className="font-semibold truncate">{p.title}</p>
                           <p className="text-[11px] text-muted-foreground">
@@ -201,7 +223,7 @@ export function Navbar() {
                         key={t.id}
                         className="flex items-center gap-2.5 rounded-lg p-1.5 text-xs text-foreground"
                       >
-                        <img src={t.coverImageUrl} alt="" className="h-7 w-7 rounded object-cover" />
+                        <img src={t.coverImageUrl} alt="" loading="lazy" decoding="async" className="h-7 w-7 rounded object-cover" />
                         <div className="truncate">
                           <p className="font-semibold truncate">{t.title}</p>
                           <p className="text-[11px] text-muted-foreground">{t.artistName}</p>
@@ -223,7 +245,7 @@ export function Navbar() {
                         onClick={() => setSearchOpen(false)}
                         className="flex items-center gap-2.5 rounded-lg p-1.5 hover:bg-white/5 text-xs text-foreground"
                       >
-                        <img src={u.avatarUrl} alt="" className="h-7 w-7 rounded-full object-cover" />
+                        <img src={u.avatarUrl} alt="" loading="lazy" decoding="async" className="h-7 w-7 rounded-full object-cover" />
                         <div className="truncate">
                           <p className="font-semibold truncate">{u.displayName}</p>
                           <p className="text-[11px] text-muted-foreground">@{u.username}</p>
@@ -325,6 +347,8 @@ export function Navbar() {
                 <img
                   src={user.avatarUrl}
                   alt=""
+                  loading="lazy"
+                  decoding="async"
                   className="h-7 w-7 rounded-md object-cover ring-1 ring-border"
                 />
                 <span className="hidden sm:inline text-xs font-semibold text-foreground">

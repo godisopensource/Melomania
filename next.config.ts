@@ -1,7 +1,30 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
+  poweredByHeader: false,
+  compress: true,
+  experimental: {
+    // Tree-shake the icon + radix barrels: without this every page ships
+    // the whole lucide-react / radix packages.
+    optimizePackageImports: [
+      "lucide-react",
+      "@radix-ui/react-avatar",
+      "@radix-ui/react-dialog",
+      "@radix-ui/react-dropdown-menu",
+      "@radix-ui/react-popover",
+      "@radix-ui/react-scroll-area",
+      "@radix-ui/react-separator",
+      "@radix-ui/react-slider",
+      "@radix-ui/react-tabs",
+      "@radix-ui/react-tooltip",
+    ],
+  },
   images: {
+    formats: ["image/avif", "image/webp"],
+    // Thumbnails are small: don't generate huge variants.
+    deviceSizes: [320, 480, 640, 828],
+    imageSizes: [64, 96, 128, 256],
+    minimumCacheTTL: 86400,
     remotePatterns: [
       { protocol: "https", hostname: "i.ytimg.com" },
       { protocol: "https", hostname: "i9.ytimg.com" },

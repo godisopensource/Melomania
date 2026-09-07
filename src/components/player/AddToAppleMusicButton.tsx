@@ -12,7 +12,7 @@
 
 import React, { useState } from "react";
 import { ExternalLink, Loader2, AlertTriangle, X, Music2 } from "lucide-react";
-import { usePlayer } from "../providers/PlayerProvider";
+import { usePlayerState } from "../providers/PlayerProvider";
 import { useLinkPrefs } from "@/lib/link-prefs";
 
 interface ITunesHit {
@@ -27,7 +27,7 @@ interface ITunesHit {
 }
 
 export function AddToAppleMusicButton({ className = "" }: { className?: string }) {
-  const { currentTrack } = usePlayer();
+  const { currentTrack } = usePlayerState();
   const [prefs] = useLinkPrefs();
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);

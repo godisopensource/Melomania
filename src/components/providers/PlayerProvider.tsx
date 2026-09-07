@@ -1,15 +1,19 @@
 "use client";
 
-import React, { createContext, useContext, useState, useRef, useEffect } from "react";
-import { MusicResource, MusicSource } from "@/types";
-import { parseYouTubeUrl } from "@/lib/utils";
+import React, {
+  createContext,
+  useCallback,
+  useContext,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
+import { MusicResource } from "@/types";
 
-interface PlayerContextType {
+interface PlayerState {
   currentTrack: MusicResource | null;
   youtubeId: string | null;
   isPlaying: boolean;
-  currentTime: number;
-  duration: number;
   volume: number;
   activeCommentTime: number | null;
   activeShareId: string | null;
@@ -17,6 +21,10 @@ interface PlayerContextType {
   queue: MusicResource[];
   queueIndex: number;
   activePlaylistId: string | null;
+  pausedAt: number | null;
+}
+
+interface PlayerActions {
   playTrack: (track: MusicResource, initialTime?: number, shareId?: string) => void;
   /** Stops everything and clears the player (logout, no media, 0:00). */
   reset: () => void;
@@ -34,18 +42,31 @@ interface PlayerContextType {
   setActiveCommentTime: (t: number | null) => void;
   playerRef: any;
   setPlayerInstance: (instance: any) => void;
-  pausedAt: number | null;
   setPausedAt: (t: number | null) => void;
 }
 
-const PlayerContext = createContext<PlayerContextType | undefined>(undefined);
+interface PlayerProgress {
+  currentTime: number;
+  duration: number;
+}
+
+interface PlayerContextType extends PlayerState, PlayerActions, PlayerProgress {}
+
+// Split contexts: state/actions change rarely, progress ticks ~1Hz.
+// Components that don't display time should use usePlayerState() so the
+// 1Hz ticker never re-renders them (critical on mobile / old PCs).
+const PlayerStateContext = createContext<(PlayerState & PlayerActions) | undefined>(
+  undefined
+);
+const PlayerProgressContext = createContext<PlayerProgress | undefined>(undefined);
 
 export function PlayerProvider({ children }: { children: React.ReactNode }) {
   const [currentTrack, setCurrentTrack] = useState<MusicResource | null>(null);
   const [youtubeId, setYoutubeId] = useState<string | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
-  const [currentTime, setCurrentTime] = useState(0);
-  const [duration, setDuration] = useState(240);
+  // Progress lives in its own state so ticking it doesn't recreate the
+  // state context value (and thus doesn't re-render state-only consumers).
+  const [progress, setProgress] = useState<PlayerProgress>({ currentTime: 0, duration: 240 });
   const [volume, setVolumeState] = useState(80);
   const [activeCommentTime, setActiveCommentTime] = useState<number | null>(null);
   const [activeShareId, setActiveShareId] = useState<string | null>(null);
@@ -55,12 +76,15 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
   const [activePlaylistId, setActivePlaylistId] = useState<string | null>(null);
 
   const playerInstanceRef = useRef<any>(null);
+  // Last applied progress — syncProgress is called ~1Hz from the YT poller;
+  // skip setState when the whole second / duration didn't change.
+  const lastProgressRef = useRef<{ t: number; d: number }>({ t: 0, d: 240 });
 
-  const setPlayerInstance = (instance: any) => {
+  const setPlayerInstance = useCallback((instance: any) => {
     playerInstanceRef.current = instance;
-  };
+  }, []);
 
-  const resolveYoutubeId = (track: MusicResource): string => {
+  const resolveYoutubeId = useCallback((track: MusicResource): string => {
     let vidId = "dX3k_QDnzHE";
     if (track.coverImageUrl?.includes("vi/")) {
       const match = track.coverImageUrl.match(/vi\/([^\/]+)/);
@@ -75,116 +99,149 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       vidId = "MV_3Dpw-BRY";
     }
     return vidId;
-  };
+  }, []);
 
-  const loadIntoPlayer = (vidId: string, initialTime: number) => {
+  const loadIntoPlayer = useCallback((vidId: string, initialTime: number) => {
     if (playerInstanceRef.current && typeof playerInstanceRef.current.loadVideoById === "function") {
       playerInstanceRef.current.loadVideoById({
         videoId: vidId,
         startSeconds: initialTime,
       });
     }
-  };
+  }, []);
 
-  const playTrack = (track: MusicResource, initialTime: number = 0, shareId?: string) => {
-    setCurrentTrack(track);
-    if (shareId) setActiveShareId(shareId);
-    if (track.playlistId) setActivePlaylistId(track.playlistId);
-    setDuration(track.durationSeconds || 240);
+  const playTrack = useCallback(
+    (track: MusicResource, initialTime: number = 0, shareId?: string) => {
+      setCurrentTrack(track);
+      if (shareId) setActiveShareId(shareId);
+      if (track.playlistId) setActivePlaylistId(track.playlistId);
+      lastProgressRef.current = { t: initialTime, d: track.durationSeconds || 240 };
+      setProgress({ currentTime: initialTime, duration: track.durationSeconds || 240 });
 
-    const vidId = resolveYoutubeId(track);
+      const vidId = resolveYoutubeId(track);
 
-    setYoutubeId(vidId);
-    setCurrentTime(initialTime);
-    setIsPlaying(true);
-    loadIntoPlayer(vidId, initialTime);
-  };
+      setYoutubeId(vidId);
+      setIsPlaying(true);
+      loadIntoPlayer(vidId, initialTime);
+    },
+    [loadIntoPlayer, resolveYoutubeId]
+  );
 
   /** Plays a playlist in its original sourcePosition order. */
-  const playQueue = (tracks: MusicResource[], startIndex: number = 0, playlistId?: string) => {
-    const ordered = [...tracks].sort((a, b) => (a.sourcePosition ?? 0) - (b.sourcePosition ?? 0));
-    const idx = Math.max(0, Math.min(startIndex, ordered.length - 1));
-    setQueue(ordered);
-    setQueueIndex(idx);
-    const first = ordered[idx];
-    if (playlistId) setActivePlaylistId(playlistId);
-    else if (first?.playlistId) setActivePlaylistId(first.playlistId);
-    if (first) playTrack(first);
-  };
+  const playQueue = useCallback(
+    (tracks: MusicResource[], startIndex: number = 0, playlistId?: string) => {
+      const ordered = [...tracks].sort((a, b) => (a.sourcePosition ?? 0) - (b.sourcePosition ?? 0));
+      const idx = Math.max(0, Math.min(startIndex, ordered.length - 1));
+      setQueue(ordered);
+      setQueueIndex(idx);
+      const first = ordered[idx];
+      if (playlistId) setActivePlaylistId(playlistId);
+      else if (first?.playlistId) setActivePlaylistId(first.playlistId);
+      if (first) playTrack(first);
+    },
+    [playTrack]
+  );
 
-  const next = () => {
-    if (queue.length === 0 || queueIndex < 0) return;
-    const nxt = Math.min(queueIndex + 1, queue.length - 1);
-    if (nxt === queueIndex) return;
+  const seekTo = useCallback(
+    (seconds: number) => {
+      const duration = lastProgressRef.current.d;
+      const clamped = Math.max(0, Math.min(seconds, duration));
+      lastProgressRef.current = { t: clamped, d: duration };
+      setProgress({ currentTime: clamped, duration });
+      setActiveCommentTime(clamped);
+
+      if (playerInstanceRef.current && typeof playerInstanceRef.current.seekTo === "function") {
+        playerInstanceRef.current.seekTo(clamped, true);
+        playerInstanceRef.current.playVideo();
+        setIsPlaying(true);
+      }
+    },
+    []
+  );
+
+  // Mutable mirrors for O(1) access inside stable callbacks
+  // (avoids re-creating next/previous on every queue change).
+  const queueRef = useRef<MusicResource[]>([]);
+  queueRef.current = queue;
+  const queueIndexRef = useRef(-1);
+  queueIndexRef.current = queueIndex;
+
+  const next = useCallback(() => {
+    const q = queueRef.current;
+    const qi = queueIndexRef.current;
+    if (q.length === 0 || qi < 0) return;
+    const nxt = Math.min(qi + 1, q.length - 1);
+    if (nxt === qi) return;
     setQueueIndex(nxt);
-    playTrack(queue[nxt]);
-  };
+    playTrack(q[nxt]);
+  }, [playTrack]);
 
-  const previous = () => {
-    if (queue.length === 0 || queueIndex < 0) return;
-    // Back to the start when more than 3s have played, else previous track
-    if (currentTime > 3) {
+  const previous = useCallback(() => {
+    if (lastProgressRef.current.t > 3) {
       seekTo(0);
       return;
     }
-    const prv = Math.max(queueIndex - 1, 0);
+    const q = queueRef.current;
+    const qi = queueIndexRef.current;
+    if (q.length === 0 || qi < 0) return;
+    const prv = Math.max(qi - 1, 0);
     setQueueIndex(prv);
-    playTrack(queue[prv]);
-  };
-
-  const seekTo = (seconds: number) => {
-    const clamped = Math.max(0, Math.min(seconds, duration));
-    setCurrentTime(clamped);
-    setActiveCommentTime(clamped);
-
-    if (playerInstanceRef.current && typeof playerInstanceRef.current.seekTo === "function") {
-      playerInstanceRef.current.seekTo(clamped, true);
-      playerInstanceRef.current.playVideo();
-      setIsPlaying(true);
-    }
-  };
+    playTrack(q[prv]);
+  }, [playTrack, seekTo]);
 
   /** Passive progress (polling): never re-seeks the player. */
-  const syncProgress = (seconds: number, totalSeconds?: number) => {
-    if (typeof seconds === "number" && !isNaN(seconds) && seconds >= 0) {
-      setCurrentTime(seconds);
-    }
-    if (typeof totalSeconds === "number" && !isNaN(totalSeconds) && totalSeconds > 0) {
-      setDuration(totalSeconds);
-    }
-  };
+  const syncProgress = useCallback((seconds: number, totalSeconds?: number) => {
+    if (typeof seconds !== "number" || isNaN(seconds) || seconds < 0) return;
+    const prev = lastProgressRef.current;
+    const t = Math.floor(seconds);
+    const d =
+      typeof totalSeconds === "number" && !isNaN(totalSeconds) && totalSeconds > 0
+        ? Math.round(totalSeconds)
+        : prev.d;
+    // Skip renders when nothing visible changed (whole second + duration).
+    if (t === Math.floor(prev.t) && d === prev.d) return;
+    lastProgressRef.current = { t: seconds, d };
+    setProgress({ currentTime: seconds, duration: d });
+  }, []);
 
-  const togglePlay = () => {
-    if (isPlaying) {
-      pause();
-    } else {
-      resume();
-    }
-  };
+  const togglePlay = useCallback(() => {
+    setIsPlaying((p) => {
+      if (p) {
+        if (playerInstanceRef.current && typeof playerInstanceRef.current.pauseVideo === "function") {
+          playerInstanceRef.current.pauseVideo();
+        }
+        return false;
+      }
+      if (playerInstanceRef.current && typeof playerInstanceRef.current.playVideo === "function") {
+        playerInstanceRef.current.playVideo();
+      }
+      return true;
+    });
+  }, []);
 
-  const pause = () => {
+  const pause = useCallback(() => {
     setIsPlaying(false);
     if (playerInstanceRef.current && typeof playerInstanceRef.current.pauseVideo === "function") {
       playerInstanceRef.current.pauseVideo();
     }
-  };
+  }, []);
 
-  const resume = () => {
+  const resume = useCallback(() => {
     setIsPlaying(true);
     if (playerInstanceRef.current && typeof playerInstanceRef.current.playVideo === "function") {
       playerInstanceRef.current.playVideo();
     }
-  };
+  }, []);
 
-  const setVolume = (v: number) => {
+  const setVolume = useCallback((v: number) => {
     setVolumeState(v);
     if (playerInstanceRef.current && typeof playerInstanceRef.current.setVolume === "function") {
       playerInstanceRef.current.setVolume(v);
     }
-  };
+  }, []);
 
   /** Full reset: silence, no track, 0:00, empty queue. */
-  const reset = () => {
+  const reset = useCallback(() => {
     try {
       if (playerInstanceRef.current && typeof playerInstanceRef.current.pauseVideo === "function") {
         playerInstanceRef.current.pauseVideo();
@@ -193,8 +250,8 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     setIsPlaying(false);
     setCurrentTrack(null);
     setYoutubeId(null);
-    setCurrentTime(0);
-    setDuration(0);
+    lastProgressRef.current = { t: 0, d: 0 };
+    setProgress({ currentTime: 0, duration: 0 });
     setVolumeState(80);
     setActiveCommentTime(null);
     setActiveShareId(null);
@@ -202,49 +259,98 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     setQueue([]);
     setQueueIndex(-1);
     setActivePlaylistId(null);
-  };
+  }, []);
+
+  /** Queue mirrors live above (queueRef / queueIndexRef). */
+
+  const stateValue = useMemo<PlayerState & PlayerActions>(
+    () => ({
+      currentTrack,
+      youtubeId,
+      isPlaying,
+      volume,
+      activeCommentTime,
+      activeShareId,
+      queue,
+      queueIndex,
+      activePlaylistId,
+      pausedAt,
+      playTrack,
+      playQueue,
+      next,
+      previous,
+      reset,
+      seekTo,
+      syncProgress,
+      togglePlay,
+      pause,
+      resume,
+      setVolume,
+      setActiveCommentTime,
+      playerRef: playerInstanceRef,
+      setPlayerInstance,
+      setPausedAt,
+    }),
+    [
+      currentTrack,
+      youtubeId,
+      isPlaying,
+      volume,
+      activeCommentTime,
+      activeShareId,
+      queue,
+      queueIndex,
+      activePlaylistId,
+      pausedAt,
+      playTrack,
+      playQueue,
+      next,
+      previous,
+      reset,
+      seekTo,
+      syncProgress,
+      togglePlay,
+      pause,
+      resume,
+      setVolume,
+      setPlayerInstance,
+    ]
+  );
+
+  const progressValue = useMemo<PlayerProgress>(
+    () => progress,
+    [progress]
+  );
 
   return (
-    <PlayerContext.Provider
-      value={{
-        currentTrack,
-        youtubeId,
-        isPlaying,
-        currentTime,
-        duration,
-        volume,
-        activeCommentTime,
-        activeShareId,
-        queue,
-        queueIndex,
-        activePlaylistId,
-        playTrack,
-        playQueue,
-        next,
-        previous,
-        reset,
-        seekTo,
-        syncProgress,
-        togglePlay,
-        pause,
-        resume,
-        setVolume,
-        setActiveCommentTime,
-        playerRef: playerInstanceRef,
-        setPlayerInstance,
-        pausedAt,
-        setPausedAt,
-      }}
-    >
-      {children}
-    </PlayerContext.Provider>
+    <PlayerStateContext.Provider value={stateValue}>
+      <PlayerProgressContext.Provider value={progressValue}>
+        {children}
+      </PlayerProgressContext.Provider>
+    </PlayerStateContext.Provider>
   );
 }
 
-export function usePlayer() {
-  const context = useContext(PlayerContext);
+/** Rarely-changing player state + actions. Does NOT re-render on time ticks. */
+export function usePlayerState() {
+  const context = useContext(PlayerStateContext);
   if (!context) {
-    throw new Error("usePlayer must be used within a PlayerProvider");
+    throw new Error("usePlayerState must be used within a PlayerProvider");
   }
   return context;
+}
+
+/** High-frequency playback progress (ticks ~1Hz). Subscribe only where time is displayed. */
+export function usePlayerProgress() {
+  const context = useContext(PlayerProgressContext);
+  if (!context) {
+    throw new Error("usePlayerProgress must be used within a PlayerProvider");
+  }
+  return context;
+}
+
+export function usePlayer(): PlayerContextType {
+  const state = usePlayerState();
+  const progress = usePlayerProgress();
+  return useMemo(() => ({ ...state, ...progress }), [state, progress]);
 }

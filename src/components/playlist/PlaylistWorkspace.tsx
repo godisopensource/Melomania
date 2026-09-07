@@ -18,7 +18,7 @@ import {
   Settings2,
 } from "lucide-react";
 import { GapComment, MusicResource, PlaylistCategory, PlaylistViewMode, EmotionalCriterion } from "@/types";
-import { usePlayer } from "../providers/PlayerProvider";
+import { usePlayerState } from "../providers/PlayerProvider";
 import { YouTubePlayer } from "../player/YouTubePlayer";
 import { PlaylistViewToggle } from "./PlaylistViewToggle";
 import {
@@ -44,7 +44,7 @@ const MAP_ZOOMS = [1, 1.5, 2, 3, 4];
 
 export function PlaylistWorkspace({ playlistId }: PlaylistWorkspaceProps) {
   const router = useRouter();
-  const { currentTrack, isPlaying, playQueue, pause, resume } = usePlayer();
+  const { currentTrack, isPlaying, playQueue, pause, resume } = usePlayerState();
   const [mode, setMode] = useState<PlaylistViewMode>("curator");
   const [playlist, setPlaylist] = useState<MusicResource | null>(null);
   const [categories, setCategories] = useState<PlaylistCategory[]>([]);
@@ -155,53 +155,88 @@ export function PlaylistWorkspace({ playlistId }: PlaylistWorkspaceProps) {
     }
   }, [activeId, selectedId]);
 
-  const moodCount = tracks.filter((t) => t.moodScore !== null && t.moodScore !== undefined).length;
-  const softCount = tracks.filter((t) => t.softnessScore !== null && t.softnessScore !== undefined).length;
+  const moodCount = useMemo(
+    () => tracks.filter((t) => t.moodScore !== null && t.moodScore !== undefined).length,
+    [tracks]
+  );
+  const softCount = useMemo(
+    () => tracks.filter((t) => t.softnessScore !== null && t.softnessScore !== undefined).length,
+    [tracks]
+  );
 
-  const legendItems: CurveLegendItem[] = useMemo(
-    () => [
+  const legendItems: CurveLegendItem[] = useMemo(() => {
+    const countFor = (get: (t: (typeof tracks)[number]) => number | null | undefined) => {
+      let n = 0;
+      for (const t of tracks) {
+        const v = get(t);
+        if (v !== null && v !== undefined) n++;
+      }
+      return n;
+    };
+    return [
       { key: "mood", label: "Mood", color: "#e8b34b", count: moodCount, visible: visibleCurves.mood !== false },
       { key: "softness", label: "Softness / harshness", color: "#5ec4b6", count: softCount, visible: visibleCurves.softness !== false },
       ...criteria.map((c) => ({
         key: c.id,
         label: c.name,
         color: c.color,
-        count: tracks.filter((t) => t.customScores?.[c.id] !== null && t.customScores?.[c.id] !== undefined).length,
+        count: countFor((t) => t.customScores?.[c.id]),
         visible: visibleCurves[c.id] !== false,
       })),
-    ],
+    ];
+  },
     [criteria, moodCount, softCount, tracks, visibleCurves]
   );
 
-  const toggleCurve = (key: string) =>
-    setVisibleCurves((prev) => ({ ...prev, [key]: !(prev[key] !== false) }));
+  const toggleCurve = useCallback(
+    (key: string) => setVisibleCurves((prev) => ({ ...prev, [key]: !(prev[key] !== false) })),
+    []
+  );
+
+  const refreshQuiet = useCallback(() => {
+    void fetchAll(true);
+  }, [fetchAll]);
 
   const anyCurveVisible = legendItems.some((i) => i.visible);
 
-  const handlePlay = (t: MusicResource) => {
-    if (activeId === t.id && isPlaying) {
-      pause();
-      return;
-    }
-    if (activeId === t.id) {
-      resume();
-      return;
-    }
-    const idx = orderedTracks.findIndex((x) => x.id === t.id);
-    // Queue the whole playlist in original order: playback continues on its own.
-    playQueue(orderedTracks, Math.max(0, idx), playlistId);
-  };
+  const handlePlay = useCallback(
+    (t: MusicResource) => {
+      if (activeId === t.id && isPlaying) {
+        pause();
+        return;
+      }
+      if (activeId === t.id) {
+        resume();
+        return;
+      }
+      const idx = orderedTracks.findIndex((x) => x.id === t.id);
+      // Queue the whole playlist in original order: playback continues on its own.
+      playQueue(orderedTracks, Math.max(0, idx), playlistId);
+    },
+    [activeId, isPlaying, orderedTracks, pause, playQueue, playlistId, resume]
+  );
 
-  const handleSelect = (t: MusicResource) => {
-    setSelectedId(t.id);
-    // Desktop curator shows the file in the side panel; otherwise open the sheet.
-    const isDesktopCurator =
-      typeof window !== "undefined" &&
-      window.matchMedia("(min-width: 1280px)").matches &&
-      mode === "curator" &&
-      isOwner;
-    if (!isDesktopCurator) setSheetOpen(true);
-  };
+  const handleSelect = useCallback(
+    (t: MusicResource) => {
+      setSelectedId(t.id);
+      // Desktop curator shows the file in the side panel; otherwise open the sheet.
+      const isDesktopCurator =
+        typeof window !== "undefined" &&
+        window.matchMedia("(min-width: 1280px)").matches &&
+        mode === "curator" &&
+        isOwner;
+      if (!isDesktopCurator) setSheetOpen(true);
+    },
+    [mode, isOwner]
+  );
+
+  const handlePointSelect = useCallback(
+    (id: string) => {
+      const t = tracks.find((x) => x.id === id);
+      if (t) handleSelect(t);
+    },
+    [tracks, handleSelect]
+  );
 
   const assignTrack = async (trackId: string, categoryId: string | null) => {
     const res = await fetch(`/api/playlists/${playlistId}/tracks/${trackId}`, {
@@ -389,10 +424,7 @@ export function PlaylistWorkspace({ playlistId }: PlaylistWorkspaceProps) {
             hoveredTrackId={hoveredId}
             selectedTrackId={selectedId}
             onPointHover={setHoveredId}
-            onPointSelect={(id) => {
-              const t = tracks.find((x) => x.id === id);
-              if (t) handleSelect(t);
-            }}
+            onPointSelect={handlePointSelect}
             compact={compact}
             zoom={MAP_ZOOMS[mapZoomIdx]}
           />
@@ -713,7 +745,7 @@ export function PlaylistWorkspace({ playlistId }: PlaylistWorkspaceProps) {
                 onHover={setHoveredId}
                 onAssign={assignTrack}
                 onDeleteCategory={deleteCategory}
-                onGapsChanged={() => fetchAll(true)}
+                onGapsChanged={refreshQuiet}
               />
               <p className="text-[11px] text-muted-foreground">
                 On desktop, hover a point or a cover to highlight the track. Categories always group
@@ -737,7 +769,7 @@ export function PlaylistWorkspace({ playlistId }: PlaylistWorkspaceProps) {
                 selectedTrackId={selectedId}
                 onSelect={handleSelect}
                 onPlay={handlePlay}
-                onGapsChanged={() => fetchAll(true)}
+                onGapsChanged={refreshQuiet}
               />
             </section>
           )}
@@ -758,7 +790,7 @@ export function PlaylistWorkspace({ playlistId }: PlaylistWorkspaceProps) {
                   categories={categories}
                   criteria={criteria}
                   playlistId={playlistId}
-                  onSaved={() => fetchAll(true)}
+                  onSaved={refreshQuiet}
                 />
               </div>
             )}
@@ -794,7 +826,7 @@ export function PlaylistWorkspace({ playlistId }: PlaylistWorkspaceProps) {
           className="melo-focus-ring fixed inset-x-3 bottom-20 z-30 flex cursor-pointer items-center gap-3 rounded-2xl border border-border bg-[#141010]/95 p-2.5 text-left shadow-2xl backdrop-blur-md xl:hidden"
         >
           {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img src={(currentTrack ?? selected)?.coverImageUrl} alt="" className="h-10 w-10 rounded-lg object-cover ring-1 ring-border" />
+          <img src={(currentTrack ?? selected)?.coverImageUrl} alt="" loading="lazy" decoding="async" className="h-10 w-10 rounded-lg object-cover ring-1 ring-border" />
           <span className="min-w-0 flex-1">
             <span className="block truncate text-xs font-bold text-foreground">{(currentTrack ?? selected)?.title}</span>
             <span className="block truncate text-[11px] text-muted-foreground">{(currentTrack ?? selected)?.artistName}</span>
@@ -845,7 +877,7 @@ export function PlaylistWorkspace({ playlistId }: PlaylistWorkspaceProps) {
               <div className="space-y-4">
                 <div className="flex items-center gap-3">
                   {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img src={selected.coverImageUrl} alt={`Cover art for ${selected.title}`} className="h-16 w-16 rounded-xl object-cover ring-1 ring-border" />
+                  <img src={selected.coverImageUrl} alt={`Cover art for ${selected.title}`} loading="lazy" decoding="async" className="h-16 w-16 rounded-xl object-cover ring-1 ring-border" />
                   <div className="min-w-0">
                     <p className="truncate text-sm font-bold text-foreground">{selected.title}</p>
                     <p className="truncate text-xs text-muted-foreground">{selected.artistName}</p>
@@ -869,7 +901,7 @@ export function PlaylistWorkspace({ playlistId }: PlaylistWorkspaceProps) {
                     categories={categories}
                     criteria={criteria}
                     playlistId={playlistId}
-                    onSaved={() => fetchAll(true)}
+                    onSaved={refreshQuiet}
                   />
                 )}
                 <TrackNoteThread track={selected} />

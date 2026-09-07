@@ -9,7 +9,7 @@ import { YouTubePlayer } from "@/components/player/YouTubePlayer";
 import { CommentSection } from "@/components/comments/CommentSection";
 import { ExportModal } from "@/components/export/ExportModal";
 import { SyncedLyrics } from "@/components/playlist/SyncedLyrics";
-import { usePlayer } from "@/components/providers/PlayerProvider";
+import { usePlayerState } from "@/components/providers/PlayerProvider";
 import { useAuth } from "@/components/providers/AuthProvider";
 import { formatTime, formatRelativeDate } from "@/lib/utils";
 import {
@@ -36,7 +36,7 @@ export default function ShareDetailPage({
 }) {
   const { id } = use(params);
   const router = useRouter();
-  const { playTrack, currentTrack } = usePlayer();
+  const { playTrack, currentTrack } = usePlayerState();
   const { user } = useAuth();
 
   const [share, setShare] = useState<MusicShare | null>(null);

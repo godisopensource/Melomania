@@ -3,7 +3,7 @@ import React from "react";
 import { Lock, Clock } from "lucide-react";
 import { TrackNote } from "@/types";
 import { formatTime, formatRelativeDate } from "@/lib/utils";
-import { usePlayer } from "../providers/PlayerProvider";
+import { usePlayerState } from "../providers/PlayerProvider";
 import { renderRichBody } from "../comments/rich-text";
 
 interface ImmutableTrackNoteProps {
@@ -12,7 +12,7 @@ interface ImmutableTrackNoteProps {
 
 /** Opening editorial note: set in stone once published (no edit, no delete). */
 export function ImmutableTrackNote({ note }: ImmutableTrackNoteProps) {
-  const { seekTo } = usePlayer();
+  const { seekTo } = usePlayerState();
   const hasTime = note.startTimeSeconds !== null && note.startTimeSeconds !== undefined;
   return (
     <article className="rounded-2xl border border-[#e8b34b]/30 bg-[#e8b34b]/[0.06] p-4" aria-label="Opening editorial note">

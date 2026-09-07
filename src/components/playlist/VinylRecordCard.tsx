@@ -1,5 +1,5 @@
 "use client";
-import React from "react";
+import React, { memo, useCallback } from "react";
 import { Play, Pause } from "lucide-react";
 import { MusicResource } from "@/types";
 import { cn } from "@/lib/utils";
@@ -23,8 +23,9 @@ interface VinylRecordCardProps {
 /**
  * Vinyl card: cover only by default (no title or artist shown).
  * Overlay on desktop hover / keyboard focus. On mobile, tap selects + opens the sheet.
+ * Memoized: shelves re-render on hover/selection — only the affected card updates.
  */
-export function VinylRecordCard({ track, index, isActive, isPlaying, isSelected, width, flipped, onFlip, onSelect, onPlay }: VinylRecordCardProps) {
+export const VinylRecordCard = memo(function VinylRecordCard({ track, index, isActive, isPlaying, isSelected, width, flipped, onFlip, onSelect, onPlay }: VinylRecordCardProps) {
   const handleActivate = () => {
     // Touch devices have no hover: first tap flips the sleeve to reveal
     // Play / Details (same as desktop hover), Details opens the file.
@@ -77,13 +78,10 @@ export function VinylRecordCard({ track, index, isActive, isPlaying, isSelected,
         />
         {/* Left spine, stacked-sleeve feel */}
         <span className="melo-spine pointer-events-none absolute inset-y-0 left-0 w-[7px]" aria-hidden="true" />
-        {/* Playing badge */}
+        {/* Playing badge (static dot: no infinite ping animation) */}
         {isActive && (
           <span className="absolute right-2 top-2 flex items-center gap-1 rounded-full bg-brand-500 px-2 py-0.5 text-[10px] font-bold text-white shadow">
-            <span className="relative flex h-1.5 w-1.5">
-              <span className="absolute h-full w-full animate-ping rounded-full bg-white opacity-70" />
-              <span className="h-1.5 w-1.5 rounded-full bg-white" />
-            </span>
+            <span className="h-1.5 w-1.5 rounded-full bg-white" aria-hidden="true" />
             {isPlaying ? "PLAY" : "PAUSE"}
           </span>
         )}
@@ -125,4 +123,53 @@ export function VinylRecordCard({ track, index, isActive, isPlaying, isSelected,
       </p>
     </div>
   );
-}
+});
+
+/**
+ * Per-sleeve wrapper: per-card closures live inside a memoized boundary,
+ * so hovering/selecting one sleeve doesn't re-render the whole shelf.
+ */
+export const VinylRecordItem = memo(function VinylRecordItem({
+  track,
+  index,
+  width,
+  isActive,
+  isPlaying,
+  isSelected,
+  flippedId,
+  onFlipId,
+  onSelect,
+  onPlay,
+}: {
+  track: MusicResource;
+  index: number;
+  width: number;
+  isActive: boolean;
+  isPlaying: boolean;
+  isSelected: boolean;
+  flippedId: string | null;
+  onFlipId: (id: string | null) => void;
+  onSelect: (t: MusicResource) => void;
+  onPlay: (t: MusicResource) => void;
+}) {
+  const flipped = flippedId === track.id;
+  const handleFlip = useCallback(() => onFlipId(flipped ? null : track.id), [onFlipId, flipped, track.id]);
+  const handleSelect = useCallback(() => onSelect(track), [onSelect, track]);
+  const handlePlay = useCallback(() => onPlay(track), [onPlay, track]);
+  return (
+    <div role="listitem" aria-label={`${track.title}, track ${index + 1}`}>
+      <VinylRecordCard
+        track={track}
+        index={index}
+        width={width}
+        isActive={isActive}
+        isPlaying={isPlaying}
+        isSelected={isSelected}
+        flipped={flipped}
+        onFlip={handleFlip}
+        onSelect={handleSelect}
+        onPlay={handlePlay}
+      />
+    </div>
+  );
+});

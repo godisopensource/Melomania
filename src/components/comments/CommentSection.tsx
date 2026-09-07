@@ -3,7 +3,7 @@
 import React, { useState } from "react";
 import { Comment, User, MusicResource } from "@/types";
 import { useAuth } from "../providers/AuthProvider";
-import { usePlayer } from "../providers/PlayerProvider";
+import { usePlayerProgress, usePlayerState } from "../providers/PlayerProvider";
 import { MentionInput } from "./MentionInput";
 import { renderRichBody } from "./rich-text";
 import { TrackNoteThread } from "../playlist/TrackNoteThread";
@@ -46,7 +46,8 @@ export function CommentSection({
     return <TrackNoteThread track={track} />;
   }
   const { user, openAuthModal } = useAuth();
-  const { currentTime, seekTo, activeCommentTime } = usePlayer();
+  const { seekTo, activeCommentTime } = usePlayerState();
+  const { currentTime } = usePlayerProgress();
 
   const [newCommentText, setNewCommentText] = useState("");
   const [includeTimecode, setIncludeTimecode] = useState(false);

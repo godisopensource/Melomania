@@ -1,8 +1,8 @@
 "use client";
-import React, { useState } from "react";
+import React, { memo, useCallback, useMemo, useState } from "react";
 import { Minus, Trash2, Loader2 } from "lucide-react";
 import { MusicResource, PlaylistCategory, GapComment } from "@/types";
-import { TrackCoverCard } from "./TrackCoverCard";
+import { TrackCoverItem } from "./TrackCoverCard";
 import { GapStrip } from "./GapStrip";
 
 interface CategoryContainerProps {
@@ -40,7 +40,7 @@ interface CategoryContainerProps {
  * The creator stretches it over neighbours (+), releases edge tracks (−),
  * or deletes the block. Chronology is enforced server-side.
  */
-export function CategoryContainer({
+export const CategoryContainer = memo(function CategoryContainer({
   category,
   tracks,
   activeTrackId,
@@ -65,11 +65,14 @@ export function CategoryContainer({
   onDeleteCategory,
 }: CategoryContainerProps) {
   const [busy, setBusy] = useState<string | null>(null);
-  const ordered = [...tracks].sort((a, b) => (a.sourcePosition ?? 0) - (b.sourcePosition ?? 0));
+  const ordered = useMemo(
+    () => [...tracks].sort((a, b) => (a.sourcePosition ?? 0) - (b.sourcePosition ?? 0)),
+    [tracks]
+  );
   const start = ordered[0]?.sourcePosition ?? 0;
   const end = ordered[ordered.length - 1]?.sourcePosition ?? 0;
 
-  const run = async (key: string, fn: () => Promise<void>) => {
+  const run = useCallback(async (key: string, fn: () => Promise<void>) => {
     setBusy(key);
     try {
       await fn();
@@ -78,7 +81,7 @@ export function CategoryContainer({
     } finally {
       setBusy(null);
     }
-  };
+  }, []);
 
   return (
     <section
@@ -186,19 +189,19 @@ export function CategoryContainer({
       )}
       <div className="grid grid-cols-2 gap-3 p-3 pt-2 sm:grid-cols-3 lg:grid-cols-4">
         {ordered.map((t) => (
-          <TrackCoverCard
+          <TrackCoverItem
             key={t.id}
             track={t}
             categoryColor={category.color}
             isActive={activeTrackId === t.id}
             isPlaying={isPlaying}
             isHighlighted={hoveredTrackId === t.id || selectedTrackId === t.id}
-            onSelect={() => onSelect(t)}
-            onPlay={() => onPlay(t)}
+            onSelect={onSelect}
+            onPlay={onPlay}
             onHover={onHover}
           />
         ))}
       </div>
     </section>
   );
-}
+});

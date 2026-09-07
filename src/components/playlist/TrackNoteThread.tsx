@@ -1,9 +1,9 @@
 "use client";
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Loader2, MessageSquareText, Clock, CornerDownRight, Trash2, Send } from "lucide-react";
 import { TrackNote, MusicResource } from "@/types";
 import { useAuth } from "../providers/AuthProvider";
-import { usePlayer } from "../providers/PlayerProvider";
+import { usePlayerProgress, usePlayerState } from "../providers/PlayerProvider";
 import { MentionInput } from "../comments/MentionInput";
 import { formatTime, formatRelativeDate } from "@/lib/utils";
 import { renderRichBody } from "../comments/rich-text";
@@ -20,7 +20,8 @@ interface TrackNoteThreadProps {
  */
 export function TrackNoteThread({ track }: TrackNoteThreadProps) {
   const { user, openAuthModal } = useAuth();
-  const { seekTo, activeCommentTime, currentTime } = usePlayer();
+  const { seekTo, activeCommentTime } = usePlayerState();
+  const { currentTime } = usePlayerProgress();
   const [notes, setNotes] = useState<TrackNote[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -53,8 +54,11 @@ export function TrackNoteThread({ track }: TrackNoteThreadProps) {
     fetchNotes();
   }, [fetchNotes]);
 
-  const initial = notes.find((n) => n.isInitial) ?? null;
-  const replies = notes.flatMap((n) => (n.isInitial ? n.replies ?? [] : [n]));
+  const initial = useMemo(() => notes.find((n) => n.isInitial) ?? null, [notes]);
+  const replies = useMemo(
+    () => notes.flatMap((n) => (n.isInitial ? n.replies ?? [] : [n])),
+    [notes]
+  );
 
   useEffect(() => {
     const timed = replies.filter(
