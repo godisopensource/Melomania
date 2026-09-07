@@ -157,7 +157,7 @@ export const VinylRecordItem = memo(function VinylRecordItem({
   const handleSelect = useCallback(() => onSelect(track), [onSelect, track]);
   const handlePlay = useCallback(() => onPlay(track), [onPlay, track]);
   return (
-    <div role="listitem" aria-label={`${track.title}, track ${index + 1}`}>
+    <div role="listitem" aria-label={`${track.title}, track ${index + 1}`} className="melo-vinyl-item">
       <VinylRecordCard
         track={track}
         index={index}

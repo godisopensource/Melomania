@@ -171,7 +171,7 @@ export function CommentSection({
       <div
         id={`comment-${item.id}`}
         key={item.id}
-        className={`group relative rounded-xl p-4 transition-all ${
+        className={`melo-note group relative rounded-xl p-4 transition-all ${
           isReply ? "ml-6 mt-3 border-l-2 border-brand-500/30 bg-card/40" : "bg-card/75 border border-border"
         } ${isTimeActive ? "ring-2 ring-brand-500 bg-brand-500/5" : "hover:border-border/80"}`}
       >

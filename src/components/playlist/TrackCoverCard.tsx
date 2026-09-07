@@ -29,7 +29,7 @@ export const TrackCoverCard = memo(function TrackCoverCard({ track, categoryColo
       onFocus={() => onHover(track.id)}
       onBlur={() => onHover(null)}
       className={cn(
-        "group relative overflow-hidden rounded-xl border bg-black/50 transition-all duration-200",
+        "melo-crate-card group relative overflow-hidden rounded-xl border bg-black/50 transition-all duration-200",
         isActive
           ? "border-brand-500 shadow-[0_0_0_1px_#af3535,0_8px_32px_rgba(175,53,53,0.35)]"
           : isHighlighted

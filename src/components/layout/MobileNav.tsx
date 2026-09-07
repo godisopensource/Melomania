@@ -64,7 +64,7 @@ export function MobileNav() {
             pathname.includes("/profile") ? "text-brand-410" : "text-muted-foreground"
           }`}
         >
-          <img src={user.avatarUrl} alt="" className="h-4 w-4 rounded-full object-cover" />
+          <img src={user.avatarUrl} alt="" loading="lazy" decoding="async" className="h-4 w-4 rounded-full object-cover" />
           <span>Profile</span>
         </Link>
       ) : (

@@ -124,6 +124,21 @@
   content-visibility: auto;
   contain-intrinsic-size: auto 340px;
 }
+/* Same containment for playlist shelves, curator grids and threads:
+   long playlists only render what's near the viewport. Estimates are
+   replaced by real sizes after first paint (auto). */
+.melo-vinyl-item {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 200px 260px;
+}
+.melo-crate-card {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 220px 300px;
+}
+.melo-note {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 300px 120px;
+}
 /* Small screens: the repeating grain scanlines repaint on every scroll
    frame on weak GPUs — keep the warm radial tints, drop the scanlines. */
 @media (max-width: 640px) {
@@ -135,6 +150,15 @@
   /* Static sleeves on touch: no 350ms 3D transition on every tap. */
   .melo-vinyl-card {
     transition: none;
+  }
+  /* backdrop-filter is the priciest mobile GPU op: drop it on the two
+     largest blurred surfaces (hero banner + every feed card). Translucent
+     backgrounds remain, so the look stays flat-dark instead of glassy.
+     (Unlayered CSS wins over Tailwind's layered utilities.) */
+  .melo-hero,
+  .melo-feed-card {
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
   }
 }
 .melo-paper-line {

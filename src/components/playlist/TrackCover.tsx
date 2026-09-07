@@ -1,32 +1,27 @@
 "use client";
 import React, { useEffect, useMemo, useState } from "react";
 
-/**
- * Resolve the cheapest reliable YouTube thumbnail.
- * hqdefault (480x360) always exists and is plenty for sleeves / cards /
- * the Now Playing panel (all rendered <= 420px wide). maxres (1280px)
- * 404s on most videos and costs ~6x the bytes + decode time on mobile,
- * so it is never requested by default.
- */
-function pickInitial(url?: string, eager?: boolean): string | null {
-  if (!url) return null;
-  const m = url.match(/^(https?:\/\/i\.ytimg\.com\/vi\/([^/]+)\/).*$/);
-  if (!m) return url;
+/** Best-effort quality chain for YouTube thumbnails: maxres → sd → hq. */
+function upgradeChain(url?: string): string[] {
+  if (!url) return [];
+  const m = url.match(/^(https?:\/\/i\.ytimg\.com\/vi\/([^/]+)\/)([^?#]+)/);
+  if (!m) return [url];
   const base = m[1];
-  // Eager hero art: try sd (640px) first, fall back to hq on error.
-  // Lazy art: hq directly — zero fallback requests in the common path.
-  return eager ? `${base}sddefault.jpg` : `${base}hqdefault.jpg`;
+  const chain = [`${base}maxresdefault.jpg`, `${base}sddefault.jpg`, `${base}hqdefault.jpg`];
+  if (!chain.includes(url)) chain.push(url);
+  return [...new Set(chain)];
 }
 
-function fallbackFor(current: string): string | null {
-  const m = current.match(/^(https?:\/\/i\.ytimg\.com\/vi\/([^/]+)\/)([^?#]+)$/);
-  if (!m) return null;
-  const base = m[1];
-  const file = m[3];
-  if (file === "sddefault.jpg") return `${base}hqdefault.jpg`;
-  if (file === "hqdefault.jpg") return `${base}mqdefault.jpg`;
-  return null;
+function videoIdOf(url?: string): string | null {
+  if (!url) return null;
+  const m = url.match(/^https?:\/\/i\.ytimg\.com\/vi\/([^/]+)\//);
+  return m ? m[1] : null;
 }
+
+// Session cache: the best working resolution per video, probed once.
+// Every remount / revisit / sibling card reuses it — no repeat 404s,
+// no repeat full-size downloads for the same video.
+const bestUrlCache = new Map<string, string>();
 
 interface TrackCoverProps {
   src?: string;
@@ -36,18 +31,32 @@ interface TrackCoverProps {
 }
 
 /**
- * Cover art with bounded cost: at most 2 small requests (sd→hq for eager
- * heroes, single hq for everything else), lazy + async decode off-screen.
+ * Cover art that always tries the best YouTube resolution first
+ * (maxres 1280px) and steps down on error. Non-YouTube URLs pass through.
+ * (Quality remains bounded by what YouTube exposes per video.)
  */
 export function TrackCover({ src, alt, className = "", eager = false }: TrackCoverProps) {
-  const initial = useMemo(() => pickInitial(src, eager), [src, eager]);
-  const [current, setCurrent] = useState<string | null>(initial);
+  const chain = useMemo(() => {
+    const full = upgradeChain(src);
+    // Fast path: a previous probe already resolved this video.
+    const vid = videoIdOf(src);
+    if (vid && bestUrlCache.has(vid)) {
+      const best = bestUrlCache.get(vid)!;
+      // Keep the cached winner first, rest as fallback (order preserved).
+      return [best, ...full.filter((u) => u !== best)];
+    }
+    return full;
+  }, [src]);
+  const [step, setStep] = useState(0);
 
   useEffect(() => {
-    setCurrent(pickInitial(src, eager));
-  }, [src, eager]);
+    setStep(0);
+  }, [src]);
 
-  if (!current) return null;
+  const vid = videoIdOf(src);
+
+  if (chain.length === 0) return null;
+  const current = chain[Math.min(step, chain.length - 1)];
 
   return (
     // eslint-disable-next-line @next/next/no-img-element
@@ -58,14 +67,11 @@ export function TrackCover({ src, alt, className = "", eager = false }: TrackCov
       decoding="async"
       fetchPriority={eager ? "high" : "auto"}
       draggable={false}
-      onError={() => {
-        setCurrent((prev) => {
-          if (!prev) return prev;
-          // Never loop back to the original oversized URL: only step down.
-          const next = fallbackFor(prev);
-          return next ?? prev;
-        });
+      onLoad={() => {
+        // Remember the winner: siblings / revisits skip probing entirely.
+        if (vid && !bestUrlCache.has(vid)) bestUrlCache.set(vid, current);
       }}
+      onError={() => setStep((s) => Math.min(s + 1, chain.length - 1))}
       className={className}
     />
   );

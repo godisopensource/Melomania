@@ -15,16 +15,12 @@ const inter = localFont({
   weight: "100 900",
 });
 
-// Display / accent font: Bonbance Bold Condensed
+// Display / accent font: Bonbance Bold Condensed (woff2 only — the legacy
+// woff fallback is not preloaded; all modern browsers/mobile use woff2).
 const bonbance = localFont({
   src: [
     {
       path: "./fonts/Bonbance-BoldCondensed.woff2",
-      weight: "700",
-      style: "normal",
-    },
-    {
-      path: "./fonts/Bonbance-BoldCondensed.woff",
       weight: "700",
       style: "normal",
     },

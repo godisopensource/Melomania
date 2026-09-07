@@ -7,6 +7,27 @@ import { User as UserIcon, Music, Disc, ListMusic, Clock, Tag as TagIcon } from 
 
 const formatTimecode = (s: number) => formatTime(s);
 
+// Session cache for the #tag list (same data everywhere, no refetch per menu open).
+let cachedAllTags: { tag: string; count: number }[] | null = null;
+let allTagsPromise: Promise<{ tag: string; count: number }[]> | null = null;
+
+function loadAllTags(): Promise<{ tag: string; count: number }[]> {
+  if (cachedAllTags) return Promise.resolve(cachedAllTags);
+  if (!allTagsPromise) {
+    allTagsPromise = fetch("/api/tags?limit=30")
+      .then((res) => (res.ok ? res.json() : { tags: [] }))
+      .then((data) => {
+        cachedAllTags = data.tags || [];
+        return cachedAllTags as { tag: string; count: number }[];
+      })
+      .catch(() => [] as { tag: string; count: number }[])
+      .finally(() => {
+        allTagsPromise = null;
+      }) as Promise<{ tag: string; count: number }[]>;
+  }
+  return allTagsPromise;
+}
+
 interface MentionInputProps {
   value: string;
   onChange: (val: string) => void;
@@ -46,39 +67,38 @@ export function MentionInput({
   useEffect(() => {
     if (!showMenu || trigger !== "@") return;
 
-    const fetchMatches = async () => {
+    const controller = new AbortController();
+    // Debounced + abortable: typing "@name" no longer fires a full
+    // search per keystroke or stacks stale responses on slow networks.
+    const timer = setTimeout(async () => {
       try {
-        const res = await fetch(`/api/music/search?q=${encodeURIComponent(mentionQuery)}`);
+        const res = await fetch(`/api/music/search?q=${encodeURIComponent(mentionQuery)}`, {
+          signal: controller.signal,
+        });
         if (res.ok) {
           const data = await res.json();
           setUsers(data.users || []);
           setTracks(data.tracks || []);
           setPlaylists(data.playlists || []);
         }
-      } catch (err) {
-        console.error("Mention search error:", err);
+      } catch (err: any) {
+        if (err?.name !== "AbortError") console.error("Mention search error:", err);
       }
-    };
+    }, 300);
 
-    fetchMatches();
+    return () => {
+      controller.abort();
+      clearTimeout(timer);
+    };
   }, [mentionQuery, showMenu, trigger]);
 
   // #tags: top tags, filtered client-side (empty query = most used).
   useEffect(() => {
     if (!showMenu || trigger !== "#") return;
     let cancelled = false;
-    const fetchTags = async () => {
-      try {
-        const res = await fetch(`/api/tags?limit=30`);
-        if (res.ok) {
-          const data = await res.json();
-          if (!cancelled) setTopTags(data.tags || []);
-        }
-      } catch (err) {
-        console.error("Tag search error:", err);
-      }
-    };
-    fetchTags();
+    loadAllTags().then((tags) => {
+      if (!cancelled) setTopTags(tags);
+    });
     return () => {
       cancelled = true;
     };
@@ -331,7 +351,7 @@ export function MentionInput({
                 ) : opt.type === "tag" ? (
                   <TagIcon className="h-4 w-4 shrink-0 text-brand-320" aria-hidden="true" />
                 ) : opt.avatar ? (
-                  <img src={opt.avatar} alt="" className="h-5 w-5 rounded-full object-cover" />
+                  <img src={opt.avatar} alt="" loading="lazy" decoding="async" className="h-5 w-5 rounded-full object-cover" />
                 ) : (
                   <Music className="h-4 w-4 text-brand-320" />
                 )}

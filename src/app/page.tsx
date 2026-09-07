@@ -73,7 +73,7 @@ function HomeFeed() {
   return (
     <div className="space-y-8 animate-in fade-in">
       {/* Editorial Header Banner */}
-      <div className="relative overflow-hidden rounded-3xl border border-white/15 bg-gradient-to-br from-primary/10 via-card/90 to-black/60 p-6 sm:p-8 shadow-2xl backdrop-blur-2xl">
+      <div className="melo-hero relative overflow-hidden rounded-3xl border border-white/15 bg-gradient-to-br from-primary/10 via-card/90 to-black/60 p-6 sm:p-8 shadow-2xl backdrop-blur-2xl">
         <div className="relative z-10 max-w-2xl space-y-3.5">
           <h1 className="font-display text-3xl sm:text-5xl font-bold tracking-tight text-foreground leading-tight">
             Share, annotate, and discuss music

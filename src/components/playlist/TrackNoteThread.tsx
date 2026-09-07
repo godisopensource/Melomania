@@ -206,7 +206,7 @@ export function TrackNoteThread({ track }: TrackNoteThreadProps) {
                   <article
                     key={r.id}
                     id={`trackreply-${r.id}`}
-                    className={`rounded-xl border p-3 transition-colors ${spotlightId === r.id ? "melo-spotlight border-brand-500 bg-brand-500/5" : isActive ? "border-brand-500 bg-brand-500/5 ring-1 ring-brand-500" : "border-border bg-card/60"}`}
+                    className={`melo-note rounded-xl border p-3 transition-colors ${spotlightId === r.id ? "melo-spotlight border-brand-500 bg-brand-500/5" : isActive ? "border-brand-500 bg-brand-500/5 ring-1 ring-brand-500" : "border-border bg-card/60"}`}
                   >
                     <div className="flex items-start justify-between gap-2">
                       <div className="flex items-center gap-2">
