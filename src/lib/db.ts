@@ -491,12 +491,54 @@ function getStore(): DocStore {
 }
 
 /**
- * Load a fresh, normalized document. Never cached across calls: on serverless,
- * each instance must see writes committed by other instances (and survive
- * redeploys — durability comes from Postgres, not memory).
+ * Tiny per-instance read cache (transfer saver).
+ *
+ * The whole document used to be re-downloaded from Postgres on EVERY db call,
+ * so a single HTTP request firing N reads (playlist page = ~8) transferred it
+ * N times. Reads within a short window now share one download. Contract:
+ * - reads may lag writes by at most DOC_CACHE_TTL_MS (2s) on THIS instance;
+ * - `mutate()` NEVER uses the cache (always a fresh version-guarded cycle)
+ *   and invalidates it on every save, so no write can ever be lost or
+ *   applied on stale data;
+ * - treat `read()` results as read-only snapshots (same rule as before).
  */
-async function loadDoc(): Promise<LoadedDoc> {
+const DOC_CACHE_TTL_MS = 2000;
+
+interface DocCacheEntry {
+  store: DocStore;
+  data: DatabaseSchema;
+  version: number;
+  at: number;
+}
+
+let docCache: DocCacheEntry | null = null;
+
+/** TTL check, exported for tests (mirrored in tests/). */
+export function isDocCacheFresh(at: number, now: number, ttlMs = DOC_CACHE_TTL_MS): boolean {
+  return now - at < ttlMs;
+}
+
+function invalidateDocCache(store?: DocStore): void {
+  if (!docCache) return;
+  if (!store || docCache.store === store) docCache = null;
+}
+
+/**
+ * Load a fresh, normalized document. Reads share one download per
+ * DOC_CACHE_TTL_MS window (see contract above); durability still comes from
+ * Postgres, never from memory — on serverless each instance revalidates
+ * constantly and `mutate()` always bypasses the cache.
+ */
+async function loadDoc(opts?: { fresh?: boolean }): Promise<LoadedDoc> {
   const store = getStore();
+  if (
+    !opts?.fresh &&
+    docCache &&
+    docCache.store === store &&
+    isDocCacheFresh(docCache.at, Date.now())
+  ) {
+    return { data: docCache.data, version: docCache.version };
+  }
   const loaded = await store.load();
   const parsed: any = loaded.data;
   const hasAdmin =
@@ -506,6 +548,7 @@ async function loadDoc(): Promise<LoadedDoc> {
   if (!hasAdmin) {
     const fresh = getInitialSeed();
     await store.forceSave(fresh);
+    docCache = { store, data: fresh, version: loaded.version + 1, at: Date.now() };
     return { data: fresh, version: loaded.version + 1 };
   }
   const { data, dirty } = normalizeDoc(parsed);
@@ -514,11 +557,12 @@ async function loadDoc(): Promise<LoadedDoc> {
       await store.forceSave(data);
     } catch {}
   }
+  docCache = { store, data, version: loaded.version, at: Date.now() };
   return { data, version: loaded.version };
 }
 
 class MelomaniaDatabase {
-  /** Fresh read — no cross-request caching (serverless-safe). */
+  /** Read (shares one download per DOC_CACHE_TTL_MS window — see loadDoc). */
   private async read(): Promise<DatabaseSchema> {
     return (await loadDoc()).data;
   }
@@ -528,20 +572,24 @@ class MelomaniaDatabase {
    * The mutation fn is pure (operates on the fresh doc, throws on validation
    * errors without persisting). On version conflict the whole cycle reloads
    * and retries, so concurrent requests don't silently drop writes.
+   * Always bypasses the read cache and invalidates it on every save, so a
+   * later read in the same window sees the committed state.
    */
   private async mutate<T>(fn: (data: DatabaseSchema) => T): Promise<T> {
     const store = getStore();
     let lastData: DatabaseSchema | null = null;
     let lastResult: T | undefined;
     for (let attempt = 0; attempt < 5; attempt++) {
-      const loaded = await loadDoc();
+      const loaded = await loadDoc({ fresh: true });
       lastData = loaded.data;
       lastResult = fn(lastData); // may throw (validation) — nothing persisted
       const ok = await store.save(lastData, loaded.version);
+      invalidateDocCache(store);
       if (ok) return lastResult;
     }
     // Extremely contended row: last write wins rather than losing the mutation.
     await store.forceSave(lastData as DatabaseSchema);
+    invalidateDocCache(store);
     return lastResult as T;
   }
 

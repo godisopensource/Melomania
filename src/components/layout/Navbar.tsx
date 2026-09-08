@@ -50,7 +50,9 @@ export function Navbar() {
       }
     };
     fetchNotifs();
-    const timer = setInterval(fetchNotifs, 30000);
+    // Transfer saver: badges don't need 30s freshness. 120s + refetch on
+    // tab return keeps them timely while dividing notification transfer by 4.
+    const timer = setInterval(fetchNotifs, 120000);
     const onVisible = () => {
       if (!document.hidden) fetchNotifs();
     };

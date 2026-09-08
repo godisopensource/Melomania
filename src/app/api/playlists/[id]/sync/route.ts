@@ -85,12 +85,13 @@ export async function POST(
         externalUrl: t.externalUrl,
       }))
     );
-    const curated = await db.getCuratedPlaylist(playlistId);
-    // Resolve section names for the recategorization report (ids → names).
     const catName = new Map(
       (await db.getPlaylistCategories(playlistId)).map((c) => [c.id, c.name] as [string, string])
     );
     const nameOf = (id: string | null) => (id ? (catName.get(id) ?? "Uncategorized") : "Uncategorized");
+    // NOTE: no full `tracks` array in the response — the client refetches via
+    // GET and only uses the counts below. Saves ~85KB+ per sync and, more
+    // importantly, one full document read (no extra getCuratedPlaylist here).
     return NextResponse.json({
       added: result.added.map((t) => ({
         id: t.id,
@@ -116,7 +117,6 @@ export async function POST(
       // Fresh YouTube order as the server saw it (diagnostic for stale reads).
       referenceOrder: result.referenceOrder,
       total: result.total,
-      tracks: curated?.tracks ?? [],
     });
   } catch (e: any) {
     console.error("[sync] DB sync failed:", e);

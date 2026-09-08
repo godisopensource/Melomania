@@ -72,7 +72,8 @@ export default function NotificationsPage() {
 
   useEffect(() => {
     fetchNotifs();
-    const timer = setInterval(fetchNotifs, 30000);
+    // Transfer saver: same 120s cadence as the navbar badge (was 30s).
+    const timer = setInterval(fetchNotifs, 120000);
     return () => clearInterval(timer);
   }, []);
 

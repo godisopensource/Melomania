@@ -22,7 +22,6 @@ export async function GET(
       return NextResponse.json({ error: "This playlist is private." }, { status: 403 });
     }
   }
-  const uncategorized = curated.tracks.filter((t) => !t.categoryId);
   const { ownerId, isOwner } = await describePlaylistAccess(id);
   // Track id -> YouTube video id, so the player can use the real id instead
   // of sniffing it from the cover URL (covers are occasionally channel
@@ -52,7 +51,8 @@ export async function GET(
     categories: curated.categories,
     criteria: await db.getEmotionalCriteria(id),
     tracks: curated.tracks,
-    uncategorized,
+    // NOTE: no `uncategorized` field — no client consumes it (filter locally
+    // from `tracks` if ever needed). Keeps the response lean.
     videoIds,
     gapComments: await db.getGapComments(id),
     ownerId: ownerId ?? null,
