@@ -33,11 +33,20 @@ export function coverFor(videoId: string, thumbnail?: string): string {
 }
 
 /** Finds a playlist continuation token (scoped node only — safe scope). */
-function findPlaylistContinuation(obj: any): string | null {
+export function findPlaylistContinuation(obj: any): string | null {
   if (!obj || typeof obj !== "object") return null;
   if (obj.continuationItemRenderer) {
     const token =
       obj.continuationItemRenderer.continuationEndpoint?.continuationCommand?.token;
+    if (typeof token === "string" && token.length > 0) return token;
+  }
+  // Modern continuationItemViewModel shape (playlist item sections):
+  // continuationItemViewModel.continuationCommand.innertubeCommand
+  //   .continuationCommand.token
+  if (obj.continuationItemViewModel) {
+    const token =
+      obj.continuationItemViewModel.continuationCommand?.innertubeCommand
+        ?.continuationCommand?.token;
     if (typeof token === "string" && token.length > 0) return token;
   }
   // Classic playlistVideoListRenderer.continuations shape.
@@ -104,6 +113,7 @@ function diagnoseBrowse(vl: any): string {
     musicResponsiveListItemRenderer: 0,
     musicPlaylistShelfRenderer: 0,
     playlistVideoListRenderer: 0,
+    continuationItemViewModel: 0,
     error: "",
   };
   if (!vl || typeof vl !== "object") return "empty/non-object response";
@@ -127,6 +137,9 @@ function diagnoseBrowse(vl: any): string {
     if (node.playlistVideoRenderer && stats.playlistVideoRenderer < 1000) {
       stats.playlistVideoRenderer++;
     }
+    if (node.continuationItemViewModel && stats.continuationItemViewModel < 1000) {
+      stats.continuationItemViewModel++;
+    }
     if (node.musicResponsiveListItemRenderer && stats.musicResponsiveListItemRenderer < 1000) {
       stats.musicResponsiveListItemRenderer++;
     }
@@ -139,7 +152,8 @@ function diagnoseBrowse(vl: any): string {
     `playlistVideoRenderer~${stats.playlistVideoRenderer} ` +
     `musicItems~${stats.musicResponsiveListItemRenderer} ` +
     `musicShelves=${stats.musicPlaylistShelfRenderer} ` +
-    `videoLists=${stats.playlistVideoListRenderer}` +
+    `videoLists=${stats.playlistVideoListRenderer} ` +
+    `contViewModels=${stats.continuationItemViewModel}` +
     (stats.error ? ` error=${stats.error}` : "")
   );
 }

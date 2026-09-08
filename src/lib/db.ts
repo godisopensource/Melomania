@@ -697,6 +697,8 @@ class MelomaniaDatabase {
       fromCategoryId: string | null;
       toCategoryId: string | null;
     }>;
+    /** Fresh YouTube externalIds in reference order (diagnostic, read-only). */
+    referenceOrder: string[];
   }> {
     const rand = () => Math.random().toString(36).slice(2, 8);
     return this.mutate((data) => {
@@ -1107,7 +1109,7 @@ class MelomaniaDatabase {
       playlist.durationSeconds = allTracks.reduce((acc, t) => acc + (t.durationSeconds || 0), 0);
       playlist.updatedAt = now;
 
-      return { added, updatedCount, removedFromSource, total: allTracks.length, reorderApplied, reorderSkipped, recategorized };
+      return { added, updatedCount, removedFromSource, total: allTracks.length, reorderApplied, reorderSkipped, recategorized, referenceOrder: freshUnique.map((f) => f.externalId) };
     });
   }
 

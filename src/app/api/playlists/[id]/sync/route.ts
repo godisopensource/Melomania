@@ -113,6 +113,8 @@ export async function POST(
         fromCategory: nameOf(r.fromCategoryId),
         toCategory: nameOf(r.toCategoryId),
       })),
+      // Fresh YouTube order as the server saw it (diagnostic for stale reads).
+      referenceOrder: result.referenceOrder,
       total: result.total,
       tracks: curated?.tracks ?? [],
     });
