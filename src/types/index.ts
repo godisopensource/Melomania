@@ -58,6 +58,13 @@ export interface MusicResource {
   // ——— Melomania curation (non-destructive, optional for legacy data) ———
   /** Immutable original YouTube Music order. Never reordered locally. */
   sourcePosition?: number;
+  /**
+   * YouTube video id, attached client-side from the track's music source
+   * (GET /api/playlists/:id `videoIds` map). Never persisted — the source
+   * of truth stays in `musicSources`. Lets the player use the real id
+   * instead of sniffing it from the cover URL.
+   */
+  youtubeVideoId?: string;
   /** Owning playlist resource id (for tracks imported via playlist). */
   playlistId?: string;
   /** Single primary category in this version. */

@@ -24,6 +24,20 @@ export async function GET(
   }
   const uncategorized = curated.tracks.filter((t) => !t.categoryId);
   const { ownerId, isOwner } = await describePlaylistAccess(id);
+  // Track id -> YouTube video id, so the player can use the real id instead
+  // of sniffing it from the cover URL (covers are occasionally channel
+  // avatars, which carry no video id). Read-only, additive.
+  const videoIds: Record<string, string> = {};
+  try {
+    const sources = await db.getMusicSources();
+    for (const s of sources) {
+      if (s.provider === "youtube" && s.externalId && s.musicResourceId) {
+        if (videoIds[s.musicResourceId] === undefined) {
+          videoIds[s.musicResourceId] = s.externalId;
+        }
+      }
+    }
+  } catch {}
   // Sharing panel data (owner-only fields are filtered client-side, but the
   // full allowedUsers list is only useful to the owner — still safe: public users).
   const allowedUsers = [];
@@ -39,6 +53,7 @@ export async function GET(
     criteria: await db.getEmotionalCriteria(id),
     tracks: curated.tracks,
     uncategorized,
+    videoIds,
     gapComments: await db.getGapComments(id),
     ownerId: ownerId ?? null,
     isOwner,

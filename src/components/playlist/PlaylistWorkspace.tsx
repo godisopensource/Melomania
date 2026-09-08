@@ -103,7 +103,16 @@ export function PlaylistWorkspace({ playlistId }: PlaylistWorkspaceProps) {
         setPlaylist(data.playlist);
         setCategories(data.categories || []);
         setCriteria(data.criteria || []);
-        setTracks(data.tracks || []);
+        // Attach the real YouTube ids (read-only map from the API) so the
+        // player never has to sniff them from cover URLs. Curation fields
+        // (scores, categories, tags, notes) come through untouched.
+        const vids: Record<string, string> =
+          data.videoIds && typeof data.videoIds === "object" ? data.videoIds : {};
+        setTracks(
+          (data.tracks || []).map((t: MusicResource) =>
+            vids[t.id] ? { ...t, youtubeVideoId: vids[t.id] } : t
+          )
+        );
         setGapComments(data.gapComments || []);
         setIsOwner(!!data.isOwner);
         setShare(data.share ?? null);

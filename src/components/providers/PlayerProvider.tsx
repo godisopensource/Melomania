@@ -85,6 +85,13 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const resolveYoutubeId = useCallback((track: MusicResource): string => {
+    // Real id threaded from the track's music source (never persisted on the
+    // resource itself). Falls back to the legacy cover-URL sniffing so demo
+    // data and old clients keep working.
+    const explicit = track.youtubeVideoId;
+    if (typeof explicit === "string" && /^[A-Za-z0-9_-]{5,}$/.test(explicit)) {
+      return explicit;
+    }
     let vidId = "dX3k_QDnzHE";
     if (track.coverImageUrl?.includes("vi/")) {
       const match = track.coverImageUrl.match(/vi\/([^\/]+)/);

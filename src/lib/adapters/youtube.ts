@@ -16,6 +16,22 @@ function parseDurationText(text?: string): number {
 /** Maximum tracks imported from a single YouTube playlist. */
 export const MAX_PLAYLIST_TRACKS = 200;
 
+/**
+ * Canonical cover for a YouTube video.
+ *
+ * YouTube Music lockups sometimes carry a channel avatar
+ * (`yt3`/`lh3.googleusercontent.com`, e.g. `...=w120-h120-l90-rj`) instead of a
+ * video still. Those URLs carry no video id, are blocked by our CSP, and break
+ * the cover-derived playback fallback — the exact failure seen on two tracks
+ * of playlist "Charlie" (both stored the same artist avatar, played M83).
+ * Only non-video thumbnails are replaced; valid `i.ytimg.com/vi/…` URLs pass
+ * through byte-identical so sync diffs stay empty for healthy tracks.
+ */
+export function coverFor(videoId: string, thumbnail?: string): string {
+  if (thumbnail && /i\.ytimg\.com\/vi\//.test(thumbnail)) return thumbnail;
+  return `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`;
+}
+
 /** Finds a playlist continuation token (scoped node only — safe scope). */
 function findPlaylistContinuation(obj: any): string | null {
   if (!obj || typeof obj !== "object") return null;
@@ -177,7 +193,7 @@ export class YouTubeAdapter implements MusicProviderAdapter {
         artist: artist.replace(/\s*-\s*Topic$/i, "").trim(),
         album: "Single",
         durationSeconds: 230,
-        coverImageUrl,
+        coverImageUrl: coverFor(id, coverImageUrl),
         externalUrl: `https://www.youtube.com/watch?v=${id}`,
       };
     } catch (err) {
@@ -268,7 +284,7 @@ export class YouTubeAdapter implements MusicProviderAdapter {
               artist,
               album: title,
               durationSeconds: lengthSeconds,
-              coverImageUrl: thumbnail,
+              coverImageUrl: coverFor(videoId, thumbnail),
               externalUrl: `https://www.youtube.com/watch?v=${videoId}`,
             });
           }
@@ -312,7 +328,7 @@ export class YouTubeAdapter implements MusicProviderAdapter {
               artist,
               album: title,
               durationSeconds,
-              coverImageUrl: thumbnail,
+              coverImageUrl: coverFor(videoId, thumbnail),
               externalUrl: `https://www.youtube.com/watch?v=${videoId}`,
             });
           }
@@ -363,7 +379,7 @@ export class YouTubeAdapter implements MusicProviderAdapter {
               artist,
               album: title,
               durationSeconds,
-              coverImageUrl: thumbnail,
+              coverImageUrl: coverFor(videoId, thumbnail),
               externalUrl: `https://www.youtube.com/watch?v=${videoId}`,
             });
           }
