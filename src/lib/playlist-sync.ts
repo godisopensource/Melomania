@@ -135,3 +135,52 @@ export function syncSummary(diff: { toAdd: unknown[]; toKeep: unknown[]; removed
     parts.push(`${(diff.removedFromSource as unknown[]).length} no longer on YouTube (kept)`);
   return parts.length > 0 ? parts.join(" · ") : "Already up to date";
 }
+
+/**
+ * Recatégorisation automatique des morceaux DÉPLACÉS par une sync.
+ *
+ * Contexte : appliquer l'ordre YouTube de référence éclaterait parfois les
+ * catégories (qui doivent regrouper des morceaux consécutifs). Au lieu de
+ * refuser le reorder, on rattache chaque morceau déplacé à la bonne section
+ * selon la règle :
+ * - si les morceaux précédent ET suivant (dans l'ordre de référence, parmi
+ *   les morceaux existants — les nouveaux placeholders, sans catégorie, ne
+ *   servent jamais d'ancre) ont la même catégorie → cette catégorie
+ *   (c'est aussi celle du précédent, les deux clauses coïncident) ;
+ * - sinon → la catégorie du précédent ;
+ * - déplacé en tête (pas de précédent) → la catégorie du suivant ;
+ * - aucun voisin existant → conserve sa catégorie.
+ *
+ * Seuls les morceaux déplacés (`moved`) peuvent changer de catégorie ; les
+ * autres gardent la leur. Ne touche à rien d'autre (ni scores, ni tags, ni
+ * notes) — l'appelant applique les changements retournés après avoir vérifié
+ * l'invariant chronologique sur la simulation complète.
+ *
+ * @param order ids des morceaux existants (matchés + conservés-absents) dans
+ *   l'ordre de référence, sans les nouveaux morceaux.
+ * @param currentCat catégorie actuelle par id (null = non catégorisé).
+ * @param moved ids dont la position change.
+ * @returns id -> nouvelle catégorie, uniquement pour les morceaux qui changent.
+ */
+export function recategorizeMovedTracks(
+  order: string[],
+  currentCat: Map<string, string | null> | Record<string, string | null>,
+  moved: Set<string> | string[]
+): Map<string, string | null> {
+  const get = (id: string): string | null => {
+    const v = currentCat instanceof Map ? currentCat.get(id) : currentCat[id];
+    return v ?? null;
+  };
+  const movedSet = moved instanceof Set ? moved : new Set(moved);
+  const changes = new Map<string, string | null>();
+  order.forEach((id, idx) => {
+    if (!movedSet.has(id)) return;
+    const prev = idx > 0 ? order[idx - 1] : null;
+    const next = idx < order.length - 1 ? order[idx + 1] : null;
+    const target = prev ? get(prev) : next ? get(next) : get(id);
+    if ((target ?? null) !== (get(id) ?? null)) {
+      changes.set(id, target ?? null);
+    }
+  });
+  return changes;
+}

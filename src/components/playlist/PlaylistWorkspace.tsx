@@ -322,6 +322,14 @@ export function PlaylistWorkspace({ playlistId }: PlaylistWorkspaceProps) {
         parts.push(`+${data.addedCount} new track${data.addedCount > 1 ? "s" : ""} added`);
       if (data.reorderApplied)
         parts.push("order updated to match YouTube");
+      if (Array.isArray(data.recategorized) && data.recategorized.length > 0) {
+        const moves = data.recategorized
+          .map((r: any) => `“${r.title}” → “${r.toCategory}”`)
+          .join("; ");
+        parts.push(
+          `${data.recategorized.length} track${data.recategorized.length > 1 ? "s" : ""} moved to new section${data.recategorized.length > 1 ? "s" : ""}: ${moves}`
+        );
+      }
       if (Array.isArray(data.reorderSkipped) && data.reorderSkipped.length > 0) {
         const names = data.reorderSkipped
           .map((s: any) => `“${s.categoryName}” (${s.trackTitles.join(", ")})`)

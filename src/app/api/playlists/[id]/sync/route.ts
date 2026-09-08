@@ -5,8 +5,13 @@
 // YouTube Music depuis. La sync rapatrie les morceaux manquants SANS
 // toucher aux données éditoriales existantes :
 // - match sur le videoId YouTube (jamais sur le titre),
-// - nouveaux morceaux APPENDUS après la dernière position (les positions
-//   existantes, les gaps et les blocs de catégories ne bougent pas),
+// - ordre YouTube appliqué ; les morceaux déplacés sont rattachés à leur
+//   nouvelle section (catégorie du précédent dans l'ordre de référence,
+//   celle du suivant si en tête) — sauf si ça éclaterait une catégorie,
+//   auquel cas l'ancien ordre est conservé et signalé,
+// - nouveaux morceaux APPENDUS après la dernière position quand le reorder
+//   est refusé (les positions existantes, les gaps et les blocs de
+//   catégories ne bougent pas),
 // - morceaux retirés de YouTube : conservés, juste signalés,
 // - réservé au créateur de la playlist (ou admin).
 import { NextRequest, NextResponse } from "next/server";
@@ -81,6 +86,11 @@ export async function POST(
       }))
     );
     const curated = await db.getCuratedPlaylist(playlistId);
+    // Resolve section names for the recategorization report (ids → names).
+    const catName = new Map(
+      (await db.getPlaylistCategories(playlistId)).map((c) => [c.id, c.name] as [string, string])
+    );
+    const nameOf = (id: string | null) => (id ? (catName.get(id) ?? "Uncategorized") : "Uncategorized");
     return NextResponse.json({
       added: result.added.map((t) => ({
         id: t.id,
@@ -97,6 +107,12 @@ export async function POST(
       removedFromSourceCount: result.removedFromSource.length,
       reorderApplied: result.reorderApplied,
       reorderSkipped: result.reorderSkipped,
+      recategorized: result.recategorized.map((r) => ({
+        trackId: r.trackId,
+        title: r.title,
+        fromCategory: nameOf(r.fromCategoryId),
+        toCategory: nameOf(r.toCategoryId),
+      })),
       total: result.total,
       tracks: curated?.tracks ?? [],
     });

@@ -4,7 +4,7 @@ import crypto from "crypto";
 import bcrypt from "bcryptjs";
 import { neon } from "@neondatabase/serverless";
 import { normalizeMusicText } from "@/lib/utils";
-import { findChronologyViolations } from "@/lib/playlist-sync";
+import { findChronologyViolations, recategorizeMovedTracks } from "@/lib/playlist-sync";
 import {
   User,
   MusicResource,
@@ -650,14 +650,18 @@ class MelomaniaDatabase {
   /**
    * Non-destructive sync of a playlist against a fresh YouTube fetch.
    * - Existing tracks (matched by YouTube externalId) keep ALL curation
-   *   (category, scores, tags, notes) — only raw metadata is refreshed.
+   *   (scores, tags, notes) — only raw metadata is refreshed.
    * - Missing tracks are created as clean slates (no scores/category).
    * - Order follows the YouTube reference: if known tracks moved, their
    *   sourcePosition is rewritten — this is the ONLY writer of sourcePosition
-   *   besides the initial import (manual edits stay forbidden). The rewrite
-   *   is applied ONLY when every category still groups consecutive tracks
-   *   (same invariant as `wouldBreakChronology`); otherwise the old order is
-   *   kept, new tracks are appended, and the blocking categories are reported.
+   *   besides the initial import (manual edits stay forbidden). Moved tracks
+   *   are re-attached to their new section (previous track's category in
+   *   reference order, next's when first — see recategorizeMovedTracks);
+   *   unmoved tracks keep their category. The combined layout is simulated
+   *   and applied ONLY when every category still groups consecutive tracks
+   *   (same invariant as `wouldBreakChronology`); otherwise the old order
+   *   AND old categories are kept, new tracks are appended, and the blocking
+   *   categories are reported.
    * - Gap comments follow their anchor track on reorder; on a pure append a
    *   conclusion comment (after the old last track) follows the new end.
    * - Tracks absent from the fresh list are KEPT in place and reported.
@@ -685,6 +689,13 @@ class MelomaniaDatabase {
       categoryName: string;
       trackIds: string[];
       trackTitles: string[];
+    }>;
+    /** Moved tracks whose section changed (title + from/to category ids). */
+    recategorized: Array<{
+      trackId: string;
+      title: string;
+      fromCategoryId: string | null;
+      toCategoryId: string | null;
     }>;
   }> {
     const rand = () => Math.random().toString(36).slice(2, 8);
@@ -829,8 +840,13 @@ class MelomaniaDatabase {
         }
       }
 
-      // Category guard: the reference order is applied ONLY when every
-      // category still groups consecutive tracks under the new positions.
+      // Category guard + auto-recategorization: the reference order is applied
+      // together with a reassignment of MOVED tracks to their new section
+      // (previous track's category in reference order, next's when first).
+      // Unmoved tracks keep their category; scores/tags/notes are untouched.
+      // The combined result is simulated and applied ONLY when every
+      // category still groups consecutive tracks — otherwise the old order
+      // is kept (legacy skip + report), so curation can never be corrupted.
       let reorderApplied = false;
       let reorderSkipped: Array<{
         categoryId: string;
@@ -838,16 +854,39 @@ class MelomaniaDatabase {
         trackIds: string[];
         trackTitles: string[];
       }> = [];
+      // trackId -> { from, to } for moved tracks whose section changes.
+      const recatChanges = new Map<string, { from: string | null; to: string | null }>();
       if (orderChanged) {
+        const oldCatOf = new Map<string, string | null>(
+          existingRefs.map((t) => [t.id, t.categoryId ?? null] as [string, string | null])
+        );
+        const moved = new Set<string>();
+        for (const t of existingRefs) {
+          const next = newPosOf.get(t.id);
+          if (next !== undefined && next !== (t.sourcePosition ?? 0)) moved.add(t.id);
+        }
+        // Existing tracks in reference order (matched first, kept-absent
+        // tailed) — new placeholders never serve as category anchors.
+        const existingRefOrder = [
+          ...matchedRefOrder,
+          ...keptAbsent.map((t) => t.id),
+        ];
+        for (const [id, to] of recategorizeMovedTracks(existingRefOrder, oldCatOf, moved)) {
+          recatChanges.set(id, { from: oldCatOf.get(id) ?? null, to });
+        }
         const simulated = existingRefs.map((t) => ({
           id: t.id,
-          categoryId: t.categoryId ?? null,
+          categoryId: recatChanges.has(t.id)
+            ? (recatChanges.get(t.id) as { to: string | null }).to
+            : (t.categoryId ?? null),
           sourcePosition: newPosOf.get(t.id) ?? t.sourcePosition ?? 0,
         }));
         const violations = findChronologyViolations(simulated);
         if (violations.length === 0) {
           reorderApplied = true;
         } else {
+          // Safety net: combined layout still invalid — keep everything.
+          recatChanges.clear();
           const catName = new Map(
             data.playlistCategories
               .filter((c) => c.playlistId === playlistId)
@@ -884,6 +923,31 @@ class MelomaniaDatabase {
         const e = data.trackEnrichments.find((x) => x.resourceId === resourceId);
         if (e) {
           e.sourcePosition = pos;
+          e.updatedAt = now;
+        }
+      };
+
+      // Section writer for sync-driven recategorization (top-level + every
+      // embedded copy + enrichment). ONLY categoryId is written — scores,
+      // tags, notes and gaps are never touched here.
+      const setCategoryEverywhere = (resourceId: string, categoryId: string | null) => {
+        for (const r of data.musicResources) {
+          if (r.id === resourceId) {
+            r.categoryId = categoryId;
+            r.updatedAt = now;
+          }
+          if (r.type === "playlist" && Array.isArray((r as any).tracks)) {
+            for (const t of (r as any).tracks as MusicResource[]) {
+              if (t.id === resourceId) {
+                t.categoryId = categoryId;
+                t.updatedAt = now;
+              }
+            }
+          }
+        }
+        const e = data.trackEnrichments.find((x) => x.resourceId === resourceId);
+        if (e) {
+          e.categoryId = categoryId;
           e.updatedAt = now;
         }
       };
@@ -955,6 +1019,15 @@ class MelomaniaDatabase {
           if (pos !== undefined && pos !== (t.sourcePosition ?? 0)) {
             setPositionEverywhere(t.id, pos);
           }
+          // Section reassignment for moved tracks (verified violation-free
+          // above). Everywhere-mirrored like positions; scores/tags/notes
+          // untouched.
+          const recat = recatChanges.get(t.id);
+          if (recat && (t.categoryId ?? null) !== recat.to) {
+            t.categoryId = recat.to;
+            t.updatedAt = now;
+            setCategoryEverywhere(t.id, recat.to);
+          }
         }
         for (const f of freshUnique) {
           if (existingExtIds.has(f.externalId)) continue;
@@ -1016,6 +1089,16 @@ class MelomaniaDatabase {
         })
         .map((t) => ({ ...t }));
 
+      // Recategorization report (only when the reorder was applied; the
+      // safety-net skip path clears recatChanges, so this is empty there).
+      const titleOf = new Map(existingRefs.map((t) => [t.id, t.title] as [string, string]));
+      const recategorized = [...recatChanges.entries()].map(([trackId, c]) => ({
+        trackId,
+        title: titleOf.get(trackId) ?? trackId,
+        fromCategoryId: c.from,
+        toCategoryId: c.to,
+      }));
+
       const allTracks: MusicResource[] = Array.isArray((playlist as any).tracks)
         ? (playlist as any).tracks
         : [];
@@ -1024,7 +1107,7 @@ class MelomaniaDatabase {
       playlist.durationSeconds = allTracks.reduce((acc, t) => acc + (t.durationSeconds || 0), 0);
       playlist.updatedAt = now;
 
-      return { added, updatedCount, removedFromSource, total: allTracks.length, reorderApplied, reorderSkipped };
+      return { added, updatedCount, removedFromSource, total: allTracks.length, reorderApplied, reorderSkipped, recategorized };
     });
   }
 
