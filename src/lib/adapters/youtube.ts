@@ -222,9 +222,14 @@ export class YouTubeAdapter implements MusicProviderAdapter {
     try {
       const playlistUrl = `https://www.youtube.com/playlist?list=${id}`;
       const res = await fetch(playlistUrl, {
+        // Never serve a stale snapshot: a cached playlist page would make
+        // sync blind to reorders/replacements (silent empty diff).
+        cache: "no-store",
         headers: {
           "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
           "Accept-Language": "en-US,en;q=0.9",
+          "Cache-Control": "no-cache",
+          Pragma: "no-cache",
         },
       });
 
