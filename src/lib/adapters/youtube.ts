@@ -102,6 +102,63 @@ function findVideoListNode(obj: any): any | null {
 }
 
 /**
+ * Ordered video items + the list's own continuation token from a browse
+ * response (pure, tested). Handles the classic list nodes
+ * (`playlistVideoListRenderer` / `musicPlaylistShelfRenderer`) AND the modern
+ * item-section shape (`sectionListRenderer → itemSectionRenderer → contents`,
+ * videos in playlist order, `continuationItemViewModel` last). Section-level
+ * tokens for other features are deliberately ignored; when several list
+ * tokens appear, the last one wins.
+ */
+export function collectPlaylistItems(vl: any): { nodes: any[]; token: string | null } {
+  const empty = { nodes: [] as any[], token: null as string | null };
+  if (!vl || typeof vl !== "object") return empty;
+  const isVideoNode = (it: any): boolean =>
+    !!it?.playlistVideoRenderer ||
+    !!it?.lockupViewModel ||
+    !!it?.musicResponsiveListItemRenderer;
+  const scoped = findVideoListNode(vl);
+  if (scoped) {
+    const list =
+      scoped.playlistVideoListRenderer ||
+      scoped.playlistVideoListContinuation ||
+      scoped.musicPlaylistShelfRenderer;
+    const contents: any[] = Array.isArray(list?.contents) ? list.contents : [];
+    const nodes = contents.filter(isVideoNode);
+    let token: string | null = null;
+    for (const item of contents) {
+      if (isVideoNode(item)) continue;
+      const t = findPlaylistContinuation(item);
+      if (t) token = t;
+    }
+    if (!token && list) {
+      const t = findPlaylistContinuation({ continuations: list.continuations });
+      if (t) token = t;
+    }
+    return { nodes, token };
+  }
+  const sections: any[] =
+    vl?.contents?.twoColumnBrowseResultsRenderer?.tabs?.[0]?.tabRenderer?.content
+      ?.sectionListRenderer?.contents;
+  if (!Array.isArray(sections)) return empty;
+  const nodes: any[] = [];
+  let token: string | null = null;
+  for (const section of sections) {
+    const items: any[] = section?.itemSectionRenderer?.contents;
+    if (!Array.isArray(items)) continue;
+    for (const item of items) {
+      if (isVideoNode(item)) {
+        nodes.push(item);
+      } else {
+        const t = findPlaylistContinuation(item);
+        if (t) token = t;
+      }
+    }
+  }
+  return { nodes, token };
+}
+
+/**
  * One bounded pass over a browse response: top-level contents keys plus
  * hit counts for the renderers we understand. Used for terminal diagnostics
  * when no usable video list is found.
@@ -411,10 +468,11 @@ export class YouTubeAdapter implements MusicProviderAdapter {
 
       searchTree(data);
 
-      // The initial HTML only embeds the first ~100 items and often carries
-      // NO continuation token (YouTube issues it on scroll). To go further,
-      // query the browse API directly with browseId "VL<playlistId>", which
-      // returns the list together with a continuation token, then follow it.
+      // The initial HTML only embeds the first ~100 items; older snapshots
+      // carry no continuation token (YouTube issues it on scroll), newer ones
+      // do (continuationItemViewModel). To go further, query the browse API
+      // directly with browseId "VL<playlistId>", which returns the list
+      // together with a continuation token, then follow it.
       const apiKey = html.match(/"INNERTUBE_API_KEY"\s*:\s*"([^"]+)"/)?.[1];
       const clientVersion =
         html.match(/"INNERTUBE_CLIENT_VERSION"\s*:\s*"([^"]+)"/)?.[1] || "2.20250101.00.00";
@@ -540,18 +598,82 @@ export class YouTubeAdapter implements MusicProviderAdapter {
         return token;
       };
 
-      let continuation = findPlaylistContinuation(
-        findVideoListNode(data) || data
-      );
+      // Primary source: InnerTube browse API (POST). The HTML snapshot above
+      // can lag days behind on some edges (stale order, replaced videos
+      // invisible) while the API stays fresh — and vice versa. Both paths
+      // use the same parsers and the same by-externalId matching downstream,
+      // so the worst case here is exactly today's behavior (HTML fallback).
+      // Nothing is ever deleted by this choice: sync only adds/refreshes.
+      // (searchTree(data) already ran once above; a failed browse attempt
+      // re-parses it deterministically — same result, ~100ms, sync-only.)
+      const htmlTitle = title;
+      const htmlAuthor = author;
+      let browseComplete = false;
+      if (apiKey) {
+        try {
+          const vl = await browse({ browseId: `VL${id}` });
+          if (vl) {
+            const first = collectPlaylistItems(vl);
+            if (first.nodes.length > 0) {
+              const bTitle =
+                (vl as any).metadata?.playlistMetadataRenderer?.title ||
+                (vl as any).header?.playlistHeaderRenderer?.title?.simpleText ||
+                (vl as any).header?.pageHeaderRenderer?.pageTitle ||
+                (vl as any).microformat?.microformatDataRenderer?.title;
+              tracks.length = 0;
+              seenIds.clear();
+              if (typeof bTitle === "string" && bTitle.trim()) title = bTitle;
+              for (const n of first.nodes) {
+                searchTree(n);
+                if (tracks.length >= MAX_PLAYLIST_TRACKS) break;
+              }
+              let tok = first.token;
+              let guard = 0;
+              while (tok && tracks.length < MAX_PLAYLIST_TRACKS && guard < 8) {
+                guard++;
+                const js = await browse({ continuation: tok });
+                if (!js) break;
+                tok = ingestActions(js);
+              }
+              if ((!tok || tracks.length >= MAX_PLAYLIST_TRACKS) && tracks.length > 0) {
+                browseComplete = true;
+                console.warn(
+                  `[YouTube] playlist ${id}: ${tracks.length} tracks via browse API (terminal, HTML snapshot bypassed)`
+                );
+              }
+            }
+          }
+        } catch {
+          browseComplete = false;
+        }
+      }
+      if (!browseComplete) {
+        // HTML fallback (today's behavior, byte-identical): reset anything
+        // the failed browse attempt may have staged, then parse the page.
+        title = htmlTitle;
+        author = htmlAuthor;
+        tracks.length = 0;
+        seenIds.clear();
+        searchTree(data);
+      }
+
+      let continuation = browseComplete
+        ? null
+        : findPlaylistContinuation(findVideoListNode(data) || data);
       console.warn(
         `[YouTube] playlist ${id}: ${tracks.length} tracks in initial page` +
-          (continuation ? ", continuation found" : ", no continuation token in HTML")
+          (browseComplete
+            ? " (browse API, terminal)"
+            : continuation
+              ? ", continuation found"
+              : ", no continuation token in HTML")
       );
 
       // No token in HTML but the list may be truncated: open the list via
       // browseId "VL<id>" to obtain one. Falls back to the YouTube Music
       // web client when the main client returns no usable list.
-      if (!continuation && tracks.length >= 95 && tracks.length < MAX_PLAYLIST_TRACKS) {
+      // Skipped when the browse-API path above already won.
+      if (!browseComplete && !continuation && tracks.length >= 95 && tracks.length < MAX_PLAYLIST_TRACKS) {
         const tryClients: Array<[string, string]> = [
           ["WEB", clientVersion],
           ["WEB_REMIX", "1.20250101.00.00"],
