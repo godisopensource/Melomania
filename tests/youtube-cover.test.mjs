@@ -6,6 +6,9 @@ import assert from "node:assert/strict";
 
 // Mirror of coverFor() in src/lib/adapters/youtube.ts
 function coverFor(videoId, thumbnail) {
+  if (videoId && /^[A-Za-z0-9_-]{11}$/.test(videoId)) {
+    return `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`;
+  }
   if (thumbnail && /i\.ytimg\.com\/vi\//.test(thumbnail)) return thumbnail;
   return `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`;
 }
@@ -46,8 +49,16 @@ test("coverFor replaces lh3 thumbnails with the canonical thumbnail", () => {
   assert.equal(coverFor("XKNfjxF10vA", LH3), "https://i.ytimg.com/vi/XKNfjxF10vA/hqdefault.jpg");
 });
 
-test("coverFor leaves valid i.ytimg.com thumbnails byte-identical (no spurious sync updates)", () => {
-  assert.equal(coverFor("Gr26uDEjY7w", VALID), VALID);
+test("coverFor canonicalizes i.ytimg thumbnails (strips volatile sqp/rs params)", () => {
+  assert.equal(
+    coverFor("Gr26uDEjY7w", VALID),
+    "https://i.ytimg.com/vi/Gr26uDEjY7w/hqdefault.jpg"
+  );
+});
+
+test("coverFor leaves already-canonical thumbnails unchanged (stable sync diffs)", () => {
+  const canonical = "https://i.ytimg.com/vi/Gr26uDEjY7w/hqdefault.jpg";
+  assert.equal(coverFor("Gr26uDEjY7w", canonical), canonical);
 });
 
 test("coverFor handles missing thumbnails", () => {

@@ -24,10 +24,18 @@ export const MAX_PLAYLIST_TRACKS = 200;
  * video still. Those URLs carry no video id, are blocked by our CSP, and break
  * the cover-derived playback fallback — the exact failure seen on two tracks
  * of playlist "Charlie" (both stored the same artist avatar, played M83).
- * Only non-video thumbnails are replaced; valid `i.ytimg.com/vi/…` URLs pass
- * through byte-identical so sync diffs stay empty for healthy tracks.
+ *
+ * Canonical form is ALWAYS `https://i.ytimg.com/vi/<id>/hqdefault.jpg`
+ * (volatile `?sqp=…&rs=…` signature params stripped): those params rotate
+ * between fetches for the same image, which otherwise causes perpetual
+ * phantom "metadata refreshes" on every sync (133 at once on "Charlie").
+ * Player id-sniffing and TrackCover quality probing both work on the
+ * canonical form (maxres → sd → hq fallback chain).
  */
 export function coverFor(videoId: string, thumbnail?: string): string {
+  if (videoId && /^[A-Za-z0-9_-]{11}$/.test(videoId)) {
+    return `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`;
+  }
   if (thumbnail && /i\.ytimg\.com\/vi\//.test(thumbnail)) return thumbnail;
   return `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`;
 }

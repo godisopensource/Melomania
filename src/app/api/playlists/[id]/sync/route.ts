@@ -93,6 +93,9 @@ export async function POST(
     // GET and only uses the counts below. Saves ~85KB+ per sync and, more
     // importantly, one full document read (no extra getCuratedPlaylist here).
     return NextResponse.json({
+      // Which YouTube playlist the server actually fetched (diagnostic:
+      // rules out syncing a different playlist than the one in the app).
+      source: { externalId: ytSource.externalId, externalUrl: ytSource.externalUrl },
       added: result.added.map((t) => ({
         id: t.id,
         title: t.title,
