@@ -139,17 +139,12 @@ export function syncSummary(diff: { toAdd: unknown[]; toKeep: unknown[]; removed
 /**
  * Recatégorisation automatique des morceaux DÉPLACÉS par une sync.
  *
- * Contexte : appliquer l'ordre YouTube de référence éclaterait parfois les
- * catégories (qui doivent regrouper des morceaux consécutifs). Au lieu de
- * refuser le reorder, on rattache chaque morceau déplacé à la bonne section
- * selon la règle :
- * - si les morceaux précédent ET suivant (dans l'ordre de référence, parmi
- *   les morceaux existants — les nouveaux placeholders, sans catégorie, ne
- *   servent jamais d'ancre) ont la même catégorie → cette catégorie
- *   (c'est aussi celle du précédent, les deux clauses coïncident) ;
- * - sinon → la catégorie du précédent ;
- * - déplacé en tête (pas de précédent) → la catégorie du suivant ;
- * - aucun voisin existant → conserve sa catégorie.
+ * Règle (définie avec le curator) : un morceau déplacé prend la catégorie de
+ * son PRÉCÉDENT dans l'ordre de référence (parmi les morceaux existants —
+ * les nouveaux placeholders, sans catégorie, ne servent jamais d'ancre),
+ * ou celle du SUIVANT s'il est déplacé en tête, ou conserve la sienne s'il
+ * est seul. Si précédent et suivant ont la même catégorie, les deux clauses
+ * coïncident.
  *
  * Seuls les morceaux déplacés (`moved`) peuvent changer de catégorie ; les
  * autres gardent la leur. Ne touche à rien d'autre (ni scores, ni tags, ni
@@ -159,7 +154,8 @@ export function syncSummary(diff: { toAdd: unknown[]; toKeep: unknown[]; removed
  * @param order ids des morceaux existants (matchés + conservés-absents) dans
  *   l'ordre de référence, sans les nouveaux morceaux.
  * @param currentCat catégorie actuelle par id (null = non catégorisé).
- * @param moved ids dont la position change.
+ * @param moved ids réellement réordonnés (voir `findStationaryIds` : un
+ *   simple décalage d'index dû à des insertions ne compte PAS).
  * @returns id -> nouvelle catégorie, uniquement pour les morceaux qui changent.
  */
 export function recategorizeMovedTracks(
@@ -183,4 +179,85 @@ export function recategorizeMovedTracks(
     }
   });
   return changes;
+}
+
+/**
+ * Morceaux « stationnaires » : ceux dont l'ordre RELATIF n'a pas changé entre
+ * la version locale et la référence YouTube. Un simple décalage d'index
+ * (insertions/suppressions avant) ne déplace rien musicalement : Samara Joy
+ * reste après Simchover même si son index passe de 98 à 101. Seuls les
+ * morceaux hors plus longue sous-séquence croissante (LIS) des rangs de
+ * référence — c'est-à-dire réellement réordonnés — sont déclarés déplacés.
+ * Les ids absents d'un des deux ordres sont ignorés (défensif).
+ */
+export function findStationaryIds(
+  localOrder: string[],
+  refOrder: string[]
+): Set<string> {
+  const refRank = new Map<string, number>();
+  refOrder.forEach((id, i) => {
+    if (!refRank.has(id)) refRank.set(id, i);
+  });
+  const seq: Array<{ id: string; rank: number }> = [];
+  for (const id of localOrder) {
+    const rank = refRank.get(id);
+    if (rank !== undefined) seq.push({ id, rank });
+  }
+  // LIS strictement croissante (O(n²), n ≈ centaines de morceaux).
+  const n = seq.length;
+  const stationary = new Set<string>();
+  if (n === 0) return stationary;
+  const len = new Array<number>(n).fill(1);
+  const parent = new Array<number>(n).fill(-1);
+  let end = 0;
+  for (let i = 0; i < n; i++) {
+    for (let j = 0; j < i; j++) {
+      if (seq[j].rank < seq[i].rank && len[j] + 1 > len[i]) {
+        len[i] = len[j] + 1;
+        parent[i] = j;
+      }
+    }
+    if (len[i] > len[end]) end = i;
+  }
+  for (let p = end; p !== -1; p = parent[p]) stationary.add(seq[p].id);
+  return stationary;
+}
+
+/**
+ * Section des NOUVEAUX morceaux (règle du curator, automatique) : même règle
+ * du précédent/suivant, mais les ancres sont les morceaux EXISTANTS les plus
+ * proches dans l'ordre de référence complet (les nouveaux placeholders ne
+ * servent jamais d'ancre — sinon deux nouveautés adjacentes resteraient
+ * orphelines). Sans voisin existant : reste non catégorisé.
+ * Ne retourne que les affectations vers une section (les null restent null).
+ */
+export function assignNewTrackCategories(
+  refFull: Array<{ id: string; isNew: boolean }>,
+  currentCat: Map<string, string | null> | Record<string, string | null>
+): Map<string, string | null> {
+  const get = (id: string): string | null => {
+    const v = currentCat instanceof Map ? currentCat.get(id) : currentCat[id];
+    return v ?? null;
+  };
+  const assigned = new Map<string, string | null>();
+  refFull.forEach((entry, idx) => {
+    if (!entry.isNew) return;
+    let prev: string | null = null;
+    for (let i = idx - 1; i >= 0; i--) {
+      if (!refFull[i].isNew) {
+        prev = refFull[i].id;
+        break;
+      }
+    }
+    let next: string | null = null;
+    for (let i = idx + 1; i < refFull.length; i++) {
+      if (!refFull[i].isNew) {
+        next = refFull[i].id;
+        break;
+      }
+    }
+    const target = prev ? get(prev) : next ? get(next) : null;
+    if (target !== null) assigned.set(entry.id, target);
+  });
+  return assigned;
 }

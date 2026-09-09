@@ -101,6 +101,7 @@ export async function POST(
         id: t.id,
         title: t.title,
         artistName: t.artistName,
+        toCategory: nameOf(t.categoryId ?? null),
       })),
       addedCount: result.added.length,
       updatedCount: result.updatedCount,

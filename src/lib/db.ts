@@ -4,7 +4,7 @@ import crypto from "crypto";
 import bcrypt from "bcryptjs";
 import { neon } from "@neondatabase/serverless";
 import { normalizeMusicText } from "@/lib/utils";
-import { findChronologyViolations, recategorizeMovedTracks } from "@/lib/playlist-sync";
+import { findChronologyViolations, recategorizeMovedTracks, findStationaryIds, assignNewTrackCategories } from "@/lib/playlist-sync";
 import {
   User,
   MusicResource,
@@ -891,12 +891,17 @@ class MelomaniaDatabase {
       }
 
       // Category guard + auto-recategorization: the reference order is applied
-      // together with a reassignment of MOVED tracks to their new section
-      // (previous track's category in reference order, next's when first).
-      // Unmoved tracks keep their category; scores/tags/notes are untouched.
-      // The combined result is simulated and applied ONLY when every
+      // together with a reassignment of REORDERED tracks to their new section
+      // (previous track's category in reference order, next's when first —
+      // curator rule, fully automatic). "Reordered" means relatively moved
+      // (findStationaryIds): a pure index shift from insertions before does
+      // NOT count — Samara Joy stays put when only positions slide. New
+      // tracks get the same rule (anchored on existing tracks). Unmoved and
+      // kept-absent tracks keep their category; scores/tags/notes untouched.
+      // The combined layout is simulated and applied ONLY when every
       // category still groups consecutive tracks — otherwise the old order
-      // is kept (legacy skip + report), so curation can never be corrupted.
+      // AND old categories are kept (legacy skip + report), so curation can
+      // never be corrupted.
       let reorderApplied = false;
       let reorderSkipped: Array<{
         categoryId: string;
@@ -906,14 +911,16 @@ class MelomaniaDatabase {
       }> = [];
       // trackId -> { from, to } for moved tracks whose section changes.
       const recatChanges = new Map<string, { from: string | null; to: string | null }>();
+      // externalId -> category for new tracks joining a section.
+      const newAssigned = new Map<string, string | null>();
       if (orderChanged) {
         const oldCatOf = new Map<string, string | null>(
           existingRefs.map((t) => [t.id, t.categoryId ?? null] as [string, string | null])
         );
-        const moved = new Set<string>();
-        for (const t of existingRefs) {
-          const next = newPosOf.get(t.id);
-          if (next !== undefined && next !== (t.sourcePosition ?? 0)) moved.add(t.id);
+        const stationary = findStationaryIds(matchedLocalOrder, matchedRefOrder);
+        const movedRel = new Set<string>();
+        for (const id of matchedRefOrder) {
+          if (!stationary.has(id)) movedRel.add(id);
         }
         // Existing tracks in reference order (matched first, kept-absent
         // tailed) — new placeholders never serve as category anchors.
@@ -921,8 +928,22 @@ class MelomaniaDatabase {
           ...matchedRefOrder,
           ...keptAbsent.map((t) => t.id),
         ];
-        for (const [id, to] of recategorizeMovedTracks(existingRefOrder, oldCatOf, moved)) {
+        for (const [id, to] of recategorizeMovedTracks(existingRefOrder, oldCatOf, movedRel)) {
           recatChanges.set(id, { from: oldCatOf.get(id) ?? null, to });
+        }
+        // Full reference order (matched existing + new placeholders +
+        // kept-absent tail) for new-track section assignment.
+        const refFull: Array<{ id: string; isNew: boolean }> = [
+          ...freshUnique.map((f) => {
+            const rid = resByExt.get(f.externalId);
+            return rid
+              ? { id: rid, isNew: false }
+              : { id: f.externalId, isNew: true };
+          }),
+          ...keptAbsent.map((t) => ({ id: t.id, isNew: false })),
+        ];
+        for (const [extId, to] of assignNewTrackCategories(refFull, oldCatOf)) {
+          newAssigned.set(extId, to);
         }
         const simulated = existingRefs.map((t) => ({
           id: t.id,
@@ -931,6 +952,17 @@ class MelomaniaDatabase {
             : (t.categoryId ?? null),
           sourcePosition: newPosOf.get(t.id) ?? t.sourcePosition ?? 0,
         }));
+        // New tracks occupy reference positions too (placeholders).
+        for (const f of freshUnique) {
+          if (existingExtIds.has(f.externalId)) continue;
+          const pos = freshNewPos.get(f.externalId);
+          if (pos === undefined) continue;
+          simulated.push({
+            id: `new:${f.externalId}`,
+            categoryId: newAssigned.get(f.externalId) ?? null,
+            sourcePosition: pos,
+          });
+        }
         const violations = findChronologyViolations(simulated);
         if (violations.length === 0) {
           reorderApplied = true;
@@ -1004,7 +1036,8 @@ class MelomaniaDatabase {
 
       const createFreshTrack = (
         f: (typeof freshUnique)[number],
-        pos: number
+        pos: number,
+        categoryId: string | null = null
       ): MusicResource => {
         const trackId = `res_trk_${Date.now()}_${pos}_${rand()}`;
         const track: MusicResource = {
@@ -1021,7 +1054,9 @@ class MelomaniaDatabase {
           normalizedArtist: normalizeMusicText(f.artist),
           sourcePosition: pos,
           playlistId,
-          categoryId: null,
+          // Section assigned by the curator rule on reorder; clean slate
+          // (null) when appended without reorder.
+          categoryId,
           moodScore: null,
           softnessScore: null,
           tags: [],
@@ -1047,7 +1082,7 @@ class MelomaniaDatabase {
           resourceId: trackId,
           playlistId,
           sourcePosition: pos,
-          categoryId: null,
+          categoryId,
           moodScore: null,
           softnessScore: null,
           tags: [],
@@ -1083,7 +1118,7 @@ class MelomaniaDatabase {
           if (existingExtIds.has(f.externalId)) continue;
           const pos = freshNewPos.get(f.externalId);
           if (pos === undefined) continue;
-          const track = createFreshTrack(f, pos);
+          const track = createFreshTrack(f, pos, newAssigned.get(f.externalId) ?? null);
           added.push(track);
           existingExtIds.add(f.externalId);
           newPosOf.set(track.id, pos);

@@ -318,8 +318,23 @@ export function PlaylistWorkspace({ playlistId }: PlaylistWorkspaceProps) {
       if (!res.ok) throw new Error(data.error || "Sync failed.");
       await fetchAll(true);
       const parts: string[] = [];
-      if (data.addedCount > 0)
-        parts.push(`+${data.addedCount} new track${data.addedCount > 1 ? "s" : ""} added`);
+      if (data.addedCount > 0) {
+        const bySection = new Map<string, string[]>();
+        for (const t of data.added || []) {
+          const sec = (t as any).toCategory as string | undefined;
+          if (!sec || sec === "Uncategorized") continue;
+          const arr = bySection.get(sec) ?? [];
+          arr.push((t as any).title);
+          bySection.set(sec, arr);
+        }
+        const detail =
+          bySection.size > 0
+            ? ` (${[...bySection.entries()]
+                .map(([sec, titles]) => `${titles.length} → “${sec}”`)
+                .join("; ")})`
+            : "";
+        parts.push(`+${data.addedCount} new track${data.addedCount > 1 ? "s" : ""} added${detail}`);
+      }
       if (data.reorderApplied)
         parts.push("order updated to match YouTube");
       if (Array.isArray(data.recategorized) && data.recategorized.length > 0) {
