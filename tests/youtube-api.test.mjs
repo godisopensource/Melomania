@@ -136,3 +136,58 @@ test("mapApiItem cleans Official suffixes and skips unplayable entries", () => {
   );
   assert.equal(mapApiItem(null, "Charlie"), null);
 });
+
+// Mirror of parsePlaylistItemCount() in youtube-api.ts: official track
+// count used to cross-check a complete-looking scrape.
+function parsePlaylistItemCount(json) {
+  const n = json?.items?.[0]?.contentDetails?.itemCount;
+  return typeof n === "number" && Number.isFinite(n) && n >= 0 ? n : null;
+}
+
+// Mirror of the adapter's mismatch rule: prefer the Data API only when the
+// official count exists AND disagrees with the scrape (their Charlie case:
+// 133 scraped vs 140 official). Agreement, unknown count, or disabled flag
+// all keep today's behavior and spend nothing more.
+function shouldPreferApi({ allowApi, scrapeCount, officialCount }) {
+  if (!allowApi) return false;
+  if (scrapeCount <= 0) return false; // handled by the empty-scrape path
+  if (officialCount === null || officialCount === undefined) return false;
+  return officialCount !== scrapeCount;
+}
+
+test("parsePlaylistItemCount reads contentDetails.itemCount", () => {
+  assert.equal(
+    parsePlaylistItemCount({ items: [{ contentDetails: { itemCount: 140 } }] }),
+    140
+  );
+  assert.equal(parsePlaylistItemCount({ items: [] }), null);
+  assert.equal(parsePlaylistItemCount({}), null);
+  assert.equal(parsePlaylistItemCount(null), null);
+  assert.equal(
+    parsePlaylistItemCount({ items: [{ contentDetails: { itemCount: -1 } }] }),
+    null
+  );
+});
+
+test("count-mismatch rule prefers the API only on real disagreement", () => {
+  assert.equal(
+    shouldPreferApi({ allowApi: true, scrapeCount: 133, officialCount: 140 }),
+    true
+  );
+  assert.equal(
+    shouldPreferApi({ allowApi: true, scrapeCount: 136, officialCount: 136 }),
+    false
+  );
+  assert.equal(
+    shouldPreferApi({ allowApi: true, scrapeCount: 133, officialCount: null }),
+    false
+  );
+  assert.equal(
+    shouldPreferApi({ allowApi: false, scrapeCount: 133, officialCount: 140 }),
+    false
+  );
+  assert.equal(
+    shouldPreferApi({ allowApi: true, scrapeCount: 0, officialCount: 140 }),
+    false
+  );
+});

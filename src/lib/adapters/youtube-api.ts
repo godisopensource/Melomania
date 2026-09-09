@@ -3,9 +3,12 @@ import { MAX_PLAYLIST_TRACKS } from "./types";
 
 /**
  * YouTube Data API v3 fallback (server-side only — the key never leaves
- * the server). Used ONLY when HTML scraping + browse API yield nothing
- * usable (failure, empty list, or truncated pagination): the official API
- * returns fresh data where edge-cached scrapes can lag days behind.
+ * the server). Two engagements, both cheap:
+ * - full fetch when scraping yields nothing usable (failure, empty list,
+ *   or truncated pagination);
+ * - 1-unit count check (`fetchPlaylistItemCount`) when scraping returns a
+ *   complete-looking list: if the official count disagrees, the scrape is
+ *   a stale edge snapshot and the full API fetch wins.
  *
  * Quota cost per full fetch ≈ 1 (playlists.list) + ~3 (playlistItems, 50/page)
  * + ~3 (videos.list durations, 50/call) ≈ 8 units of the 10 000/day free
@@ -108,6 +111,49 @@ async function apiGet(
   } finally {
     clearTimeout(timeout);
   }
+}
+
+/** contentDetails.itemCount → number. Null when absent/unparsable. */
+export function parsePlaylistItemCount(json: any): number | null {
+  const n = json?.items?.[0]?.contentDetails?.itemCount;
+  return typeof n === "number" && Number.isFinite(n) && n >= 0 ? n : null;
+}
+
+/**
+ * Mismatch rule: prefer the Data API only when the official count exists
+ * AND disagrees with a non-empty scrape (e.g. 133 scraped vs 140 official).
+ * Agreement, unknown count, empty scrape (dedicated path), or disabled flag
+ * all keep today's behavior and spend nothing more.
+ */
+export function shouldPreferApi(args: {
+  allowApi: boolean;
+  scrapeCount: number;
+  officialCount: number | null;
+}): boolean {
+  if (!args.allowApi) return false;
+  if (args.scrapeCount <= 0) return false;
+  if (args.officialCount === null || args.officialCount === undefined) return false;
+  return args.officialCount !== args.scrapeCount;
+}
+
+/**
+ * Official track count for a playlist (1 quota unit). Used to cross-check a
+ * complete-looking scrape: a disagreeing count means the scrape is a stale
+ * edge snapshot (e.g. 133 scraped vs 140 official). Null on any failure
+ * (caller keeps today's behavior, spending nothing more).
+ */
+export async function fetchPlaylistItemCount(
+  playlistId: string,
+  keyArg?: string | null
+): Promise<number | null> {
+  const key = keyArg ?? getDataApiKey();
+  if (!playlistId || !key) return null;
+  const json = await apiGet(
+    "playlists",
+    { part: "contentDetails", id: playlistId },
+    key
+  );
+  return parsePlaylistItemCount(json);
 }
 
 /**

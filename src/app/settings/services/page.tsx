@@ -317,10 +317,11 @@ export default function ConnectedServicesPage() {
               </div>
             ) : null}
             <p className="leading-relaxed">
-              When scraping can&apos;t read a playlist (blocked, empty or truncated),
-              Melomania retries once through the official YouTube API (~8 quota units
-              per sync, server key only — never exposed here). Turn off to never
-              spend API quota.
+              When scraping can&apos;t read a playlist (blocked, empty, truncated)
+              or disagrees with the official track count (stale snapshot),
+              Melomania retries through the official YouTube API (~1 quota unit
+              per check, ~8 per full fallback fetch, server key only — never
+              exposed here). Turn off to never spend API quota.
             </p>
           </div>
         </div>

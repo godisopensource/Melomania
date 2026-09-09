@@ -1,6 +1,6 @@
 import { MusicProviderAdapter, TrackSearchInput, TrackSearchResult, ExternalTrack, ExternalPlaylist, CreatePlaylistInput, AddTracksResult } from "./types";
 import { MAX_PLAYLIST_TRACKS } from "./types";
-import { fetchPlaylistViaApi } from "./youtube-api";
+import { fetchPlaylistViaApi, fetchPlaylistItemCount, shouldPreferApi } from "./youtube-api";
 import { parseYouTubeUrl, normalizeMusicText } from "../utils";
 
 function parseDurationText(text?: string): number {
@@ -746,6 +746,25 @@ export class YouTubeAdapter implements MusicProviderAdapter {
         if (trimmedTracks.length === 0) return null;
         // Truncated scrape with a dead API fallback: return what we have
         // (today's behavior) rather than nothing.
+      }
+
+      // Freshness cross-check (1 quota unit): a complete-looking scrape can
+      // still be a stale edge snapshot. If the official count disagrees,
+      // the API (authoritative) wins; if it agrees or is unreachable, keep
+      // the scrape and spend nothing more. Known blind spot: pure reorders
+      // at identical counts remain invisible until the edge refreshes.
+      if (allowApi && trimmedTracks.length > 0) {
+        const officialCount = await fetchPlaylistItemCount(id);
+        if (shouldPreferApi({ allowApi, scrapeCount: trimmedTracks.length, officialCount })) {
+          console.warn(
+            `[YouTube] playlist ${id}: count mismatch (scrape ${trimmedTracks.length} vs API ${officialCount}), preferring Data API`
+          );
+          const viaApi = await fetchPlaylistViaApi(id);
+          if (viaApi) return viaApi;
+          console.warn(
+            `[YouTube] playlist ${id}: Data API fetch failed after mismatch, keeping scrape`
+          );
+        }
       }
 
       const coverImageUrl =
