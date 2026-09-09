@@ -53,7 +53,8 @@ export async function POST(
   let fresh;
   try {
     fresh = await youtubeAdapter.getPlaylist(
-      ytSource.externalUrl || ytSource.externalId
+      ytSource.externalUrl || ytSource.externalId,
+      { allowDataApiFallback: check.user.youtubeDataApiEnabled !== false }
     );
   } catch (e) {
     console.error("[sync] YouTube fetch failed:", e);

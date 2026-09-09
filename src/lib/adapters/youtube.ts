@@ -1,4 +1,6 @@
 import { MusicProviderAdapter, TrackSearchInput, TrackSearchResult, ExternalTrack, ExternalPlaylist, CreatePlaylistInput, AddTracksResult } from "./types";
+import { MAX_PLAYLIST_TRACKS } from "./types";
+import { fetchPlaylistViaApi } from "./youtube-api";
 import { parseYouTubeUrl, normalizeMusicText } from "../utils";
 
 function parseDurationText(text?: string): number {
@@ -13,8 +15,8 @@ function parseDurationText(text?: string): number {
   return dur > 0 ? dur : 210;
 }
 
-/** Maximum tracks imported from a single YouTube playlist. */
-export const MAX_PLAYLIST_TRACKS = 200;
+/** Maximum tracks imported from a single YouTube playlist (re-exported). */
+export { MAX_PLAYLIST_TRACKS } from "./types";
 
 /**
  * Canonical cover for a YouTube video.
@@ -292,11 +294,24 @@ export class YouTubeAdapter implements MusicProviderAdapter {
   /**
    * Fetches full playlist items from YouTube / YouTube Music
    */
-  async getPlaylist(externalIdOrUrl: string): Promise<ExternalPlaylist | null> {
+  async getPlaylist(
+    externalIdOrUrl: string,
+    opts?: { allowDataApiFallback?: boolean }
+  ): Promise<ExternalPlaylist | null> {
     const { playlistId } = parseYouTubeUrl(externalIdOrUrl);
     const id = playlistId || externalIdOrUrl;
 
     if (!id) return null;
+
+    // Official Data API v3, used ONLY as a fallback when scraping yields
+    // nothing usable (the user can also kill-switch it per account to save
+    // quota: settings → services → YouTube Data API).
+    const allowApi = opts?.allowDataApiFallback !== false;
+    const tryDataApi = async (reason: string): Promise<ExternalPlaylist | null> => {
+      if (!allowApi) return null;
+      console.warn(`[YouTube] playlist ${id}: scrape ${reason}, trying Data API fallback`);
+      return await fetchPlaylistViaApi(id);
+    };
 
     try {
       const playlistUrl = `https://www.youtube.com/playlist?list=${id}`;
@@ -720,6 +735,19 @@ export class YouTubeAdapter implements MusicProviderAdapter {
 
       const trimmedTracks = tracks.slice(0, MAX_PLAYLIST_TRACKS);
 
+      // Insufficient scrape → official API fallback (empty, or pagination
+      // died with an unresolved continuation and a short list).
+      const truncated = !!continuation && tracks.length < MAX_PLAYLIST_TRACKS;
+      if (trimmedTracks.length === 0 || truncated) {
+        const viaApi = await tryDataApi(
+          trimmedTracks.length === 0 ? "returned no tracks" : "pagination truncated"
+        );
+        if (viaApi) return viaApi;
+        if (trimmedTracks.length === 0) return null;
+        // Truncated scrape with a dead API fallback: return what we have
+        // (today's behavior) rather than nothing.
+      }
+
       const coverImageUrl =
         trimmedTracks[0]?.coverImageUrl ||
         "https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=600&auto=format&fit=crop&q=80";
@@ -737,6 +765,7 @@ export class YouTubeAdapter implements MusicProviderAdapter {
       };
     } catch (err) {
       console.error("Error extracting YouTube playlist:", err);
+      if (allowApi) return await fetchPlaylistViaApi(id);
       return null;
     }
   }

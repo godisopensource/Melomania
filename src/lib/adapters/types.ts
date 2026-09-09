@@ -1,5 +1,8 @@
 import { MusicProvider } from "@/types";
 
+/** Maximum tracks imported from a single YouTube playlist (shared cap). */
+export const MAX_PLAYLIST_TRACKS = 200;
+
 export interface TrackSearchInput {
   query?: string;
   title: string;

@@ -2,6 +2,7 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { YouTubeAdapter } from "@/lib/adapters/youtube";
+import { getSessionUser } from "@/lib/auth";
 import { parseYouTubeUrl } from "@/lib/utils";
 
 const youtubeAdapter = new YouTubeAdapter();
@@ -16,7 +17,10 @@ export async function POST(req: NextRequest) {
     const { videoId, playlistId, timecode } = parseYouTubeUrl(url);
 
     if (playlistId) {
-      const playlist = await youtubeAdapter.getPlaylist(url);
+      const viewer = await getSessionUser().catch(() => null);
+      const playlist = await youtubeAdapter.getPlaylist(url, {
+        allowDataApiFallback: !viewer || viewer.youtubeDataApiEnabled !== false,
+      });
       if (!playlist) {
         return NextResponse.json({ error: "Unable to retrieve this YouTube playlist." }, { status: 404 });
       }

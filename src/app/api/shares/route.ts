@@ -105,7 +105,9 @@ export async function POST(req: NextRequest) {
 
     if (playlistId) {
       // Single fetch — reused for resources, sources and enrichments.
-      const playlist = await youtubeAdapter.getPlaylist(url);
+      const playlist = await youtubeAdapter.getPlaylist(url, {
+        allowDataApiFallback: user.youtubeDataApiEnabled !== false,
+      });
       if (!playlist) {
         return NextResponse.json({ error: "Unable to load playlist from YouTube." }, { status: 404 });
       }

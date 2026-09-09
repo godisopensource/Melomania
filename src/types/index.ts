@@ -35,6 +35,12 @@ export interface User {
   avatarUrl: string;
   bio?: string;
   isPublic: boolean;
+  /**
+   * Allow the server to fall back to the official YouTube Data API v3 when
+   * scraping can't read a playlist (settings → services). Undefined = allowed.
+   * Kill-switch for API quota: the key is global, this flag is per account.
+   */
+  youtubeDataApiEnabled?: boolean;
   passwordHash?: string;
   role?: 'user' | 'admin';
   createdAt: string;

@@ -90,6 +90,12 @@ export async function PATCH(
     if (typeof body.isPublic === "boolean") {
       updates.isPublic = body.isPublic;
     }
+    if (body.youtubeDataApiEnabled !== undefined) {
+      if (typeof body.youtubeDataApiEnabled !== "boolean") {
+        return NextResponse.json({ error: "youtubeDataApiEnabled must be a boolean." }, { status: 400 });
+      }
+      updates.youtubeDataApiEnabled = body.youtubeDataApiEnabled;
+    }
     const updated = await db.updateUser(found.id, updates);
     if (!updated) return NextResponse.json({ error: "User not found." }, { status: 404 });
     const isSelf = session.id === found.id;

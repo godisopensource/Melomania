@@ -27,6 +27,9 @@ export default function ConnectedServicesPage() {
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState<string | null>(null);
   const [spotifyNotice, setSpotifyNotice] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
+  const [ytEnabled, setYtEnabled] = useState<boolean>(true);
+  const [ytSaving, setYtSaving] = useState(false);
+  const [ytNotice, setYtNotice] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
 
   const fetchConnections = async () => {
     setLoading(true);
@@ -46,6 +49,33 @@ export default function ConnectedServicesPage() {
   useEffect(() => {
     fetchConnections();
   }, [user]);
+
+  // Server-side pref (never the API key itself, which stays in Vercel env).
+  useEffect(() => {
+    setYtEnabled(user?.youtubeDataApiEnabled !== false);
+  }, [user]);
+
+  const handleYtToggle = async (v: boolean) => {
+    if (!user?.username) return;
+    setYtEnabled(v);
+    setYtSaving(true);
+    setYtNotice(null);
+    try {
+      const res = await fetch(`/api/users/${encodeURIComponent(user.username)}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ youtubeDataApiEnabled: v }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || "Could not save.");
+      setYtNotice({ kind: "ok", text: v ? "YouTube API fallback enabled." : "YouTube API fallback disabled — scraping only." });
+    } catch (e: any) {
+      setYtEnabled((prev) => !prev);
+      setYtNotice({ kind: "err", text: e?.message || "Could not save." });
+    } finally {
+      setYtSaving(false);
+    }
+  };
 
   // Statut retour OAuth Spotify (?spotify=connected | error | not-configured).
   useEffect(() => {
@@ -238,6 +268,59 @@ export default function ConnectedServicesPage() {
             <p className="leading-relaxed">
               No login needed: the player searches the real Apple catalog and opens the track in
               Apple Music, where you add it to your playlist yourself.
+            </p>
+          </div>
+        </div>
+
+        {/* YouTube Card — official Data API as scraping fallback (quota switch) */}
+        <div className="rounded-2xl border border-border bg-card p-5 shadow space-y-3">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-[#FF0000]/20 text-[#FF0000] ring-1 ring-[#FF0000]/30">
+                <span className="font-black text-lg">Y</span>
+              </div>
+              <div>
+                <h3 className="text-sm font-bold text-foreground">YouTube Data API</h3>
+                <p className="text-xs text-muted-foreground">
+                  {ytEnabled ? "Fallback enabled" : "Fallback disabled"}
+                </p>
+              </div>
+            </div>
+
+            <ToggleSwitch
+              checked={ytEnabled}
+              onChange={handleYtToggle}
+              label="Toggle YouTube Data API fallback for playlist sync and import"
+              activeClass="bg-[#FF0000]"
+            />
+          </div>
+
+          <div className="border-t border-border/50 pt-2.5 text-[11px] text-muted-foreground space-y-1">
+            {ytSaving ? (
+              <div className="flex items-center gap-1.5">
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                <span>Saving…</span>
+              </div>
+            ) : null}
+            {ytNotice ? (
+              <div
+                className={`flex items-center gap-1.5 font-semibold ${
+                  ytNotice.kind === "ok" ? "text-emerald-400" : "text-destructive"
+                }`}
+              >
+                {ytNotice.kind === "ok" ? (
+                  <CheckCircle2 className="h-3.5 w-3.5" />
+                ) : (
+                  <AlertTriangle className="h-3.5 w-3.5" />
+                )}
+                <span>{ytNotice.text}</span>
+              </div>
+            ) : null}
+            <p className="leading-relaxed">
+              When scraping can&apos;t read a playlist (blocked, empty or truncated),
+              Melomania retries once through the official YouTube API (~8 quota units
+              per sync, server key only — never exposed here). Turn off to never
+              spend API quota.
             </p>
           </div>
         </div>
