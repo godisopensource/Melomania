@@ -33,34 +33,6 @@ function findStationaryIds(localOrder, refOrder) {
   return stationary;
 }
 
-function assignNewTrackCategories(refFull, currentCat) {
-  const get = (id) => {
-    const v = currentCat instanceof Map ? currentCat.get(id) : currentCat[id];
-    return v ?? null;
-  };
-  const assigned = new Map();
-  refFull.forEach((entry, idx) => {
-    if (!entry.isNew) return;
-    let prev = null;
-    for (let i = idx - 1; i >= 0; i--) {
-      if (!refFull[i].isNew) {
-        prev = refFull[i].id;
-        break;
-      }
-    }
-    let next = null;
-    for (let i = idx + 1; i < refFull.length; i++) {
-      if (!refFull[i].isNew) {
-        next = refFull[i].id;
-        break;
-      }
-    }
-    const target = prev ? get(prev) : next ? get(next) : null;
-    if (target !== null) assigned.set(entry.id, target);
-  });
-  return assigned;
-}
-
 const JAZZ = "cat_jazz";
 const SOUL = "cat_soul";
 
@@ -99,62 +71,113 @@ test("empty and single orders", () => {
   assert.deepEqual([...findStationaryIds(["a"], ["a"])], ["a"]);
 });
 
-test("new track between same-category neighbors joins them", () => {
-  const assigned = assignNewTrackCategories(
-    [
-      { id: "lullaby", isNew: false },
-      { id: "tutu1", isNew: true },
-      { id: "puncha", isNew: false },
-    ],
-    { lullaby: JAZZ, puncha: JAZZ }
-  );
-  assert.equal(assigned.get("tutu1"), JAZZ);
+// Mirror of resolveSections() in src/lib/playlist-sync.ts: the curator rule
+// evaluated literally (adjacent neighbors of any kind) in ONE ascending pass
+// over a working snapshot, so forward chains resolve (Elas sees OYE's Jazz).
+function resolveSections(refFull, currentCat, candidates) {
+  const snap = (id) => {
+    const v = currentCat instanceof Map ? currentCat.get(id) : currentCat[id];
+    return v ?? null;
+  };
+  const working = new Map();
+  for (const e of refFull) working.set(e.id, snap(e.id));
+  const cand = candidates instanceof Set ? candidates : new Set(candidates);
+  const order = refFull
+    .map((e, i) => i)
+    .filter((i) => cand.has(refFull[i].id))
+    .sort((a, b) => a - b);
+  const neighbor = (idx, dir) => {
+    for (let i = idx + dir; i >= 0 && i < refFull.length; i += dir) {
+      const e = refFull[i];
+      const c = working.get(e.id) ?? null;
+      if (!e.isNew || c !== null) return { found: true, cat: c };
+    }
+    return { found: false, cat: null };
+  };
+  const changes = new Map();
+  for (const idx of order) {
+    const id = refFull[idx].id;
+    const prev = neighbor(idx, -1);
+    const next = neighbor(idx, +1);
+    const target = prev.found ? prev.cat : next.found ? next.cat : (working.get(id) ?? null);
+    if ((target ?? null) !== (snap(id) ?? null)) {
+      working.set(id, target ?? null);
+      changes.set(id, target ?? null);
+    }
+  }
+  return changes;
+}
+
+test("engine: Tutu chain resolves forward in one pass (the Jazz split case)", () => {
+  const refFull = [
+    { id: "lullaby", isNew: false },
+    { id: "oye", isNew: false },
+    { id: "elas", isNew: false },
+    { id: "puncha", isNew: false },
+  ];
+  const cats = { lullaby: JAZZ, oye: null, elas: null, puncha: JAZZ };
+  const changes = resolveSections(refFull, cats, new Set(["oye", "elas"]));
+  assert.equal(changes.get("oye"), JAZZ);
+  assert.equal(changes.get("elas"), JAZZ);
 });
 
-test("adjacent new tracks anchor on existing tracks (never on each other)", () => {
-  const assigned = assignNewTrackCategories(
-    [
-      { id: "lullaby", isNew: false },
-      { id: "tutu1", isNew: true },
-      { id: "tutu2", isNew: true },
-      { id: "puncha", isNew: false },
-    ],
-    { lullaby: JAZZ, puncha: JAZZ }
-  );
-  assert.equal(assigned.get("tutu1"), JAZZ);
-  assert.equal(assigned.get("tutu2"), JAZZ);
+test("engine: stationary tracks are never candidates, kept-absent keep cats", () => {
+  const refFull = [
+    { id: "a", isNew: false },
+    { id: "kept", isNew: false },
+  ];
+  const changes = resolveSections(refFull, { a: SOUL, kept: SOUL }, new Set());
+  assert.equal(changes.size, 0);
 });
 
-test("new track at the head takes the next track's category", () => {
-  const assigned = assignNewTrackCategories(
-    [
-      { id: "intro", isNew: true },
-      { id: "a", isNew: false },
-    ],
-    { a: SOUL }
-  );
-  assert.equal(assigned.get("intro"), SOUL);
+test("engine: existing chain through a moved anchor (X then Y)", () => {
+  const refFull = [
+    { id: "p", isNew: false },
+    { id: "x", isNew: false },
+    { id: "y", isNew: false },
+    { id: "q", isNew: false },
+  ];
+  const cats = { p: JAZZ, x: null, y: null, q: JAZZ };
+  const changes = resolveSections(refFull, cats, new Set(["x", "y"]));
+  assert.equal(changes.get("x"), JAZZ);
+  assert.equal(changes.get("y"), JAZZ);
 });
 
-test("new track after an uncategorized previous stays uncategorized", () => {
-  const assigned = assignNewTrackCategories(
-    [
-      { id: "breathe", isNew: false },
-      { id: "newbie", isNew: true },
-      { id: "soul", isNew: false },
-    ],
-    { breathe: null, soul: SOUL }
-  );
-  assert.equal(assigned.has("newbie"), false);
+test("engine: head track sees past null newcomers to the next section", () => {
+  const refFull = [
+    { id: "x", isNew: false },
+    { id: "n", isNew: true },
+    { id: "y", isNew: false },
+  ];
+  const cats = { x: JAZZ, y: JAZZ };
+  const changes = resolveSections(refFull, cats, new Set(["x", "n"]));
+  assert.equal(changes.has("x"), false);
+  assert.equal(changes.get("n"), JAZZ);
 });
 
-test("no existing neighbors anywhere keeps null", () => {
-  const assigned = assignNewTrackCategories(
-    [
-      { id: "n1", isNew: true },
-      { id: "n2", isNew: true },
-    ],
-    {}
-  );
-  assert.equal(assigned.size, 0);
+test("engine: head newcomers attach to the following section", () => {
+  const refFull = [
+    { id: "n1", isNew: true },
+    { id: "n2", isNew: true },
+    { id: "y", isNew: false },
+  ];
+  const changes = resolveSections(refFull, { y: JAZZ }, new Set(["n1", "n2"]));
+  assert.equal(changes.get("n1"), JAZZ);
+  assert.equal(changes.get("n2"), JAZZ);
+});
+
+test("engine: existing null neighbor stops the scan (its own section)", () => {
+  const refFull = [
+    { id: "x", isNew: false },
+    { id: "n", isNew: true },
+    { id: "y", isNew: false },
+  ];
+  const cats = { x: null, y: JAZZ };
+  const changes = resolveSections(refFull, cats, new Set(["n"]));
+  assert.equal(changes.has("n"), false);
+});
+
+test("engine: lone candidate keeps its category", () => {
+  const changes = resolveSections([{ id: "solo", isNew: false }], { solo: SOUL }, new Set(["solo"]));
+  assert.equal(changes.size, 0);
 });

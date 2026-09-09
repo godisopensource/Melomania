@@ -4,7 +4,7 @@ import crypto from "crypto";
 import bcrypt from "bcryptjs";
 import { neon } from "@neondatabase/serverless";
 import { normalizeMusicText } from "@/lib/utils";
-import { findChronologyViolations, recategorizeMovedTracks, findStationaryIds, assignNewTrackCategories } from "@/lib/playlist-sync";
+import { findChronologyViolations, findStationaryIds, resolveSections } from "@/lib/playlist-sync";
 import {
   User,
   MusicResource,
@@ -918,21 +918,9 @@ class MelomaniaDatabase {
           existingRefs.map((t) => [t.id, t.categoryId ?? null] as [string, string | null])
         );
         const stationary = findStationaryIds(matchedLocalOrder, matchedRefOrder);
-        const movedRel = new Set<string>();
-        for (const id of matchedRefOrder) {
-          if (!stationary.has(id)) movedRel.add(id);
-        }
-        // Existing tracks in reference order (matched first, kept-absent
-        // tailed) — new placeholders never serve as category anchors.
-        const existingRefOrder = [
-          ...matchedRefOrder,
-          ...keptAbsent.map((t) => t.id),
-        ];
-        for (const [id, to] of recategorizeMovedTracks(existingRefOrder, oldCatOf, movedRel)) {
-          recatChanges.set(id, { from: oldCatOf.get(id) ?? null, to });
-        }
-        // Full reference order (matched existing + new placeholders +
-        // kept-absent tail) for new-track section assignment.
+        // Full reference order: matched existing + new placeholders (keyed
+        // by externalId) + kept-absent tail. Candidates: relatively-moved
+        // existing + every new track. One ordered pass (resolveSections).
         const refFull: Array<{ id: string; isNew: boolean }> = [
           ...freshUnique.map((f) => {
             const rid = resByExt.get(f.externalId);
@@ -942,8 +930,20 @@ class MelomaniaDatabase {
           }),
           ...keptAbsent.map((t) => ({ id: t.id, isNew: false })),
         ];
-        for (const [extId, to] of assignNewTrackCategories(refFull, oldCatOf)) {
-          newAssigned.set(extId, to);
+        const candidates = new Set<string>();
+        for (const id of matchedRefOrder) {
+          if (!stationary.has(id)) candidates.add(id);
+        }
+        for (const f of freshUnique) {
+          if (!existingExtIds.has(f.externalId)) candidates.add(f.externalId);
+        }
+        const existingIds = new Set(existingRefs.map((t) => t.id));
+        for (const [id, to] of resolveSections(refFull, oldCatOf, candidates)) {
+          if (existingIds.has(id)) {
+            recatChanges.set(id, { from: oldCatOf.get(id) ?? null, to });
+          } else {
+            newAssigned.set(id, to);
+          }
         }
         const simulated = existingRefs.map((t) => ({
           id: t.id,

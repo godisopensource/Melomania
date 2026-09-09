@@ -137,47 +137,65 @@ export function syncSummary(diff: { toAdd: unknown[]; toKeep: unknown[]; removed
 }
 
 /**
- * Recatégorisation automatique des morceaux DÉPLACÉS par une sync.
+ * Règle du curator, appliquée en UNE passe dans l'ordre de référence.
  *
- * Règle (définie avec le curator) : un morceau déplacé prend la catégorie de
- * son PRÉCÉDENT dans l'ordre de référence (parmi les morceaux existants —
- * les nouveaux placeholders, sans catégorie, ne servent jamais d'ancre),
- * ou celle du SUIVANT s'il est déplacé en tête, ou conserve la sienne s'il
- * est seul. Si précédent et suivant ont la même catégorie, les deux clauses
- * coïncident.
+ * Pour chaque morceau candidat (existant réellement réordonné — voir
+ * `findStationaryIds` — ou nouveau), la section cible est : la catégorie du
+ * voisin précédent, sinon celle du suivant, sinon il conserve la sienne.
+ * Les voisins sont lus dans un snapshot de travail mis à jour au fil de la
+ * passe (une chaîne de nouveautés se rattache de proche en proche), en
+ * sautant les nouveautés encore sans catégorie vers l'existant le plus
+ * proche dans la même direction — sans jamais dépasser un existant
+ * (même non catégorisé : c'est une section à part entière). Cas limite :
+ * sans aucun voisin, conserve sa catégorie.
  *
- * Seuls les morceaux déplacés (`moved`) peuvent changer de catégorie ; les
- * autres gardent la leur. Ne touche à rien d'autre (ni scores, ni tags, ni
- * notes) — l'appelant applique les changements retournés après avoir vérifié
- * l'invariant chronologique sur la simulation complète.
+ * Le filet `findChronologyViolations` + le rapport transparent tranchent en
+ * aval : cette fonction ne garantit que la règle, pas l'invariant.
  *
- * @param order ids des morceaux existants (matchés + conservés-absents) dans
- *   l'ordre de référence, sans les nouveaux morceaux.
- * @param currentCat catégorie actuelle par id (null = non catégorisé).
- * @param moved ids réellement réordonnés (voir `findStationaryIds` : un
- *   simple décalage d'index dû à des insertions ne compte PAS).
+ * @param refFull ordre de référence complet (matchés + nouveaux +
+ *   conservés-absents en queue), dans l'ordre.
+ * @param currentCat snapshot des catégories actuelles (existants ; null
+ *   pour les nouveaux et les non catégorisés).
+ * @param candidates ids à évaluer (déplacés relatifs + tous les nouveaux).
  * @returns id -> nouvelle catégorie, uniquement pour les morceaux qui changent.
  */
-export function recategorizeMovedTracks(
-  order: string[],
+export function resolveSections(
+  refFull: Array<{ id: string; isNew: boolean }>,
   currentCat: Map<string, string | null> | Record<string, string | null>,
-  moved: Set<string> | string[]
+  candidates: Set<string> | string[]
 ): Map<string, string | null> {
-  const get = (id: string): string | null => {
+  const getSnapshot = (id: string): string | null => {
     const v = currentCat instanceof Map ? currentCat.get(id) : currentCat[id];
     return v ?? null;
   };
-  const movedSet = moved instanceof Set ? moved : new Set(moved);
+  const working = new Map<string, string | null>();
+  for (const e of refFull) working.set(e.id, getSnapshot(e.id));
+  const cand = candidates instanceof Set ? candidates : new Set(candidates);
+  const order = refFull
+    .map((e, i) => i)
+    .filter((i) => cand.has(refFull[i].id))
+    .sort((a, b) => a - b);
+  // Voisinage : le plus proche dans la direction, en sautant les nouveautés
+  // encore sans catégorie (elles n'ont pas encore de section à transmettre).
+  const neighbor = (idx: number, dir: -1 | 1): { found: boolean; cat: string | null } => {
+    for (let i = idx + dir; i >= 0 && i < refFull.length; i += dir) {
+      const e = refFull[i];
+      const c = working.get(e.id) ?? null;
+      if (!e.isNew || c !== null) return { found: true, cat: c };
+    }
+    return { found: false, cat: null };
+  };
   const changes = new Map<string, string | null>();
-  order.forEach((id, idx) => {
-    if (!movedSet.has(id)) return;
-    const prev = idx > 0 ? order[idx - 1] : null;
-    const next = idx < order.length - 1 ? order[idx + 1] : null;
-    const target = prev ? get(prev) : next ? get(next) : get(id);
-    if ((target ?? null) !== (get(id) ?? null)) {
+  for (const idx of order) {
+    const id = refFull[idx].id;
+    const prev = neighbor(idx, -1);
+    const next = neighbor(idx, +1);
+    const target = prev.found ? prev.cat : next.found ? next.cat : (working.get(id) ?? null);
+    if ((target ?? null) !== (getSnapshot(id) ?? null)) {
+      working.set(id, target ?? null);
       changes.set(id, target ?? null);
     }
-  });
+  }
   return changes;
 }
 
@@ -221,43 +239,4 @@ export function findStationaryIds(
   }
   for (let p = end; p !== -1; p = parent[p]) stationary.add(seq[p].id);
   return stationary;
-}
-
-/**
- * Section des NOUVEAUX morceaux (règle du curator, automatique) : même règle
- * du précédent/suivant, mais les ancres sont les morceaux EXISTANTS les plus
- * proches dans l'ordre de référence complet (les nouveaux placeholders ne
- * servent jamais d'ancre — sinon deux nouveautés adjacentes resteraient
- * orphelines). Sans voisin existant : reste non catégorisé.
- * Ne retourne que les affectations vers une section (les null restent null).
- */
-export function assignNewTrackCategories(
-  refFull: Array<{ id: string; isNew: boolean }>,
-  currentCat: Map<string, string | null> | Record<string, string | null>
-): Map<string, string | null> {
-  const get = (id: string): string | null => {
-    const v = currentCat instanceof Map ? currentCat.get(id) : currentCat[id];
-    return v ?? null;
-  };
-  const assigned = new Map<string, string | null>();
-  refFull.forEach((entry, idx) => {
-    if (!entry.isNew) return;
-    let prev: string | null = null;
-    for (let i = idx - 1; i >= 0; i--) {
-      if (!refFull[i].isNew) {
-        prev = refFull[i].id;
-        break;
-      }
-    }
-    let next: string | null = null;
-    for (let i = idx + 1; i < refFull.length; i++) {
-      if (!refFull[i].isNew) {
-        next = refFull[i].id;
-        break;
-      }
-    }
-    const target = prev ? get(prev) : next ? get(next) : null;
-    if (target !== null) assigned.set(entry.id, target);
-  });
-  return assigned;
 }
